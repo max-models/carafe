@@ -412,14 +412,16 @@ class Eigenmodes:
         the inertial model. Modes whose ``a_e`` is rougher than ``roughness`` (see
         `roughness`) are numerical, at the grid scale. A mode on a boundary (the peak of
         ``|delta phi|`` at the first or last interior point) is kept: check
-        `peak_position` for wall-attached modes.
+        `peak_position` for wall-attached modes. Growing means ``Im omega`` above
+        ``1e-9`` of the largest ``|omega|`` below ``omega_max``: below that it is the
+        round-off of the eigensolver (about the machine precision times the spectrum's
+        scale), whose sign depends on the LAPACK build.
         """
         limit = self.omega_limit if omega_max is None else omega_max
+        inside = np.isfinite(self.omega) & (np.abs(self.omega) < limit)
+        scale = np.max(np.abs(self.omega[inside]), initial=0.0)
         keep = (
-            np.isfinite(self.omega)
-            & (np.imag(self.omega) > 0.0)
-            & (np.abs(self.omega) < limit)
-            & (self.roughness < roughness)
+            inside & (np.imag(self.omega) > 1e-9 * scale) & (self.roughness < roughness)
         )
         return self.select(np.flatnonzero(keep))
 
