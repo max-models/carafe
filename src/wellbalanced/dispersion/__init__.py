@@ -18,6 +18,11 @@ resolve:
   ``1 + k^2 rho_e^2`` of Boeuf's relation), with the equilibrium flow shear;
 - **Poisson or quasineutral** closure, an ionisation source, and a scan along a 1D profile.
 
+Where the profile varies over a wavelength the local relation is only a guide: the nonlocal
+eigenproblem across the whole profile (`NonlocalDispersion` on an `Equilibrium`, with
+Boeuf's state `Equilibrium.boeuf`, electron inertia and a gyro-averaged electron response as
+options) is in `wellbalanced.dispersion.eigenmodes`.
+
 Geometry and signs follow `wellbalanced.driftfluid2d`: ``x`` across the field (toward
 the anode), ``y`` along ``E x B`` for ``E_0 < 0`` and ``B > 0``, ``z`` along ``B``;
 perturbations ``exp(i (k_x x + k_y y) - i omega t)``, so ``Im omega > 0`` grows and
@@ -59,11 +64,22 @@ from plasmacoll.constants import ATOMIC_MASS, ELECTRON_MASS, ELEMENTARY_CHARGE
 from plasmacoll.units import convert_units, to_unit, unit_field
 from scipy.special import wofz
 
+from wellbalanced.dispersion.eigenmodes import (
+    BOEUF_FIGURE_2,
+    Eigenmodes,
+    Equilibrium,
+    NonlocalDispersion,
+)
+
 __all__ = [
+    "BOEUF_FIGURE_2",
     "ColdIons",
+    "Eigenmodes",
+    "Equilibrium",
     "KineticIons",
     "LocalDispersion",
     "LocalRoots",
+    "NonlocalDispersion",
     "Plasma",
     "plasma_dispersion_function",
     "scan_profile",
@@ -168,7 +184,8 @@ class Plasma:
         """Equilibrium electron velocity ``(v_0x, v_0y)``: ``E x B`` + diamagnetic, Pedersen."""
         te = self.electron_temperature  # eV, so T_e / e = te volts
         v0y = -(self.e_field + te / self.density_length) / self.b_field
-        v0x = -(self.electron_collision_frequency / self.omega_ce) * v0y
+        # the y balance m nu v_0y = e B v_0x: the Pedersen drift along the force -e E_0
+        v0x = (self.electron_collision_frequency / self.omega_ce) * v0y
         return v0x, v0y
 
     @property
