@@ -7,6 +7,15 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `wellbalanced.dispersion.eigenmodes`: the nonlocal linear eigenproblem of the gradient-drift
+  instability across a 1D profile (`NonlocalDispersion` on an `Equilibrium`): drift-fluid or
+  inertial electrons with collisions, the Padé gyro-averaged electron response, cold ions with
+  flow, charge exchange and the ionization coupling, Poisson or quasineutral, the curl-free
+  field's compressibility; `Eigenmodes.drift` picks the drift branch and `scan` follows it over
+  `k_y`. `Equilibrium.boeuf` is Boeuf's DC magnetron state (`BOEUF_FIGURE_2`, his figure 2
+  digitized), `Equilibrium.model_state` a model state at other densities.
+  `examples/nonlocal_eigenmodes.py` shows it on Boeuf's state. `wellbalanced.dispersion` is now a
+  package; its imports are unchanged.
 - `DriftFluid2D.linear_modes(frozen=("ionization_frequency",))`: the ionization frequency held
   at its base value while the source follows `n_e`, the consistent form of the nonlocal solvers.
   `examples/spoke_linear_settled.py` relaxes the 1D state with a chosen anode closure and Bohm
@@ -287,6 +296,9 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- `Plasma.electron_flow`: the equilibrium Pedersen velocity had the wrong sign; it is
+  `+(nu / omega_ce) v_0y`, toward the anode along the force `-e E_0` (a correction of a few
+  percent of `v_0y` in the Pedersen convection of the local relation).
 - The auxiliary-space preconditioner's coarsest multigrid level could be exactly singular
   (two coarse nodes reaching one fine node through a gap in a conductor); a relative
   diagonal shift of 1e-10 keeps it regular.

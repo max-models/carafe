@@ -32,6 +32,7 @@ export default defineDocs({
 			'wellbalanced.spatial.neutrals': 'Neutral gas 2D',
 			'wellbalanced.driftfluid2d': 'Drift fluid 2D',
 			'wellbalanced.dispersion': 'Local dispersion',
+			'wellbalanced.dispersion.eigenmodes': 'Nonlocal eigenmodes',
 			'wellbalanced.gasdynamics': 'Gas dynamics',
 			'wellbalanced.transport': 'Transport budget',
 		},
