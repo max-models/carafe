@@ -111,7 +111,7 @@ import scipy.sparse.linalg as spla
 import xarray as xr
 from methodcard import ConvergenceProblem, Rule, method
 from plasmacoll.constants import ATOMIC_MASS, ELECTRON_MASS, ELEMENTARY_CHARGE
-from plasmacoll.units import convert_units, to_array, to_unit, unit_field
+from plasmacoll.units import convert_units, to_array, to_unit, unit_field, unit_metadata
 from scope_profiler import profile
 
 from wellbalanced._profiling import _PROFILE_TAGS
@@ -942,8 +942,8 @@ class DriftFluid2D:
     or momentum rate that is a function is kept as it is).
     """
 
-    length_x: float = field(metadata={"unit": "m"})
-    length_y: float = field(metadata={"unit": "m"})
+    length_x: float = field(metadata=unit_metadata("m"))
+    length_y: float = field(metadata=unit_metadata("m"))
     nx: int
     ny: int
     voltage: float = unit_field("V", 260.0)

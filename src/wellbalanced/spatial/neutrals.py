@@ -807,10 +807,7 @@ class NeutralFluid2D:
         overlap = set(names) & set(self._plasma_species)
         if overlap:
             raise ValueError(f"species both neutral and plasma: {sorted(overlap)}")
-        fixed = {
-            name: to_array(value, "m^-3", f"fixed[{name!r}]")
-            for name, value in (fixed or {}).items()
-        }
+        fixed = dict(to_array(fixed or {}, "m^-3", "fixed"))
         known = set(names) | set(self._plasma_species) | set(fixed)
         self.reactions = tuple(
             r for r in reactions if set(names) & (set(r.reactants) | set(r.products))
@@ -943,8 +940,8 @@ class NeutralFluid2D:
         if unknown:
             raise ValueError(f"unknown plasma species {sorted(unknown)}")
         self._plasma = {
-            n: self._on_cells(to_array(v, "m^-3", f"densities[{n!r}]"))[:, None]
-            for n, v in densities.items()
+            n: self._on_cells(v)[:, None]
+            for n, v in to_array(densities, "m^-3", "densities").items()
         }
         electron_temperature = to_array(
             electron_temperature, "eV", "electron_temperature"
@@ -965,8 +962,8 @@ class NeutralFluid2D:
             for n, v in (ion_velocities or {}).items()
         }
         flux = {}
-        for name, values in (ion_wall_flux or {}).items():
-            values = to_array(values, "m^-2 s^-1", f"ion_wall_flux[{name!r}]")
+        wall_flux = to_array(ion_wall_flux or {}, "m^-2 s^-1", "ion_wall_flux")
+        for name, values in wall_flux.items():
             array = np.asarray(values, dtype=float)
             if array.shape != self._wall_cell.shape:
                 raise ValueError(f"{name}: one ion wall flux per wall face")

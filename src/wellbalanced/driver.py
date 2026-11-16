@@ -65,7 +65,7 @@ import xarray as xr
 from methodcard import Rule, method
 from plasmacoll import CrossSection
 from plasmacoll.constants import ATOMIC_MASS, ELECTRON_MASS, ELEMENTARY_CHARGE
-from plasmacoll.units import convert_units, to_array, to_unit, unit_field
+from plasmacoll.units import convert_units, to_unit, unit_field, unit_metadata
 from scipy.constants import mu_0 as MU_0
 from scipy.special import ellipe, ellipk, jve
 
@@ -201,8 +201,8 @@ class Coil:
     """
 
     turns: float
-    radius: float = field(metadata={"unit": "m"})
-    length: float = field(metadata={"unit": "m"})
+    radius: float = field(metadata=unit_metadata("m"))
+    length: float = field(metadata=unit_metadata("m"))
     field_factor: float | None = None
 
     def __post_init__(self) -> None:
@@ -564,15 +564,15 @@ class RFDriver:
 
     species: Sequence[Species]
     reactions: Sequence[Reaction]
-    fixed: Mapping[str, float]
-    radius: float = field(metadata={"unit": "m"})
-    length: float = field(metadata={"unit": "m"})
+    fixed: Mapping[str, float] = field(metadata=unit_metadata("m^-3", array=True))
+    radius: float = field(metadata=unit_metadata("m"))
+    length: float = field(metadata=unit_metadata("m"))
     coil_turns: float
-    coil_radius: float = field(metadata={"unit": "m"})
-    frequency: float = field(metadata={"unit": "Hz"})
-    network_resistance: float = field(metadata={"unit": "Ohm"})
+    coil_radius: float = field(metadata=unit_metadata("m"))
+    frequency: float = field(metadata=unit_metadata("Hz"))
+    network_resistance: float = field(metadata=unit_metadata("Ohm"))
     momentum_transfer: Sequence[str]
-    ion_mean_free_path: float = field(metadata={"unit": "m"})
+    ion_mean_free_path: float = field(metadata=unit_metadata("m"))
     skin_density_factor: float = 1.0
     coil_length: float | None = unit_field("m", None)
     field_factor: float | None = None
@@ -582,9 +582,6 @@ class RFDriver:
     def __post_init__(self) -> None:
         """Validate the driver."""
         convert_units(self)
-        self.fixed = {
-            k: to_array(v, "m^-3", f"fixed[{k!r}]") for k, v in self.fixed.items()
-        }
         if min(self.radius, self.length, self.frequency, self.ion_mean_free_path) <= 0:
             raise ValueError(
                 "radius, length, frequency, ion_mean_free_path must be > 0"

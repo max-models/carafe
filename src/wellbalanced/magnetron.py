@@ -67,7 +67,7 @@ import numpy as np
 import xarray as xr
 from methodcard import Rule, method
 from plasmacoll.constants import BOLTZMANN, ELECTRON_MASS, ELEMENTARY_CHARGE
-from plasmacoll.units import convert_units, to_array, to_unit, unit_field
+from plasmacoll.units import convert_units, to_array, to_unit, unit_field, unit_metadata
 from scipy.optimize import brentq
 from scipy.special import exp1
 
@@ -306,14 +306,14 @@ class TargetMaterial:
     """
 
     name: str
-    mass_u: float = field(metadata={"unit": "u"})
-    ionization_energy: float = field(metadata={"unit": "eV"})
+    mass_u: float = field(metadata=unit_metadata("u"))
+    ionization_energy: float = field(metadata=unit_metadata("eV"))
     outer_electrons: int
     argon_yield: float
     self_yield: float
     argon_secondary: float
     self_secondary: float
-    charge_exchange: float = field(metadata={"unit": "m^3 / s"})
+    charge_exchange: float = field(metadata=unit_metadata("m^3 / s"))
     verified: bool = False
 
     def __post_init__(self) -> None:

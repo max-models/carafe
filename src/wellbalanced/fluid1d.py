@@ -63,7 +63,7 @@ import scipy.sparse.linalg as spla
 import xarray as xr
 from methodcard import ConvergenceProblem, Rule, method
 from plasmacoll.constants import ELEMENTARY_CHARGE
-from plasmacoll.units import convert_units, to_array, to_unit, unit_field
+from plasmacoll.units import convert_units, to_array, to_unit, unit_field, unit_metadata
 from scope_profiler import profile
 
 from wellbalanced._profiling import _PROFILE_TAGS
@@ -567,28 +567,24 @@ class Fluid1D:
 
     species: Sequence[FluidSpecies]
     reactions: Sequence[Reaction]
-    length: float = field(metadata={"unit": "m"})
+    length: float = field(metadata=unit_metadata("m"))
     cells: int
-    fixed: Mapping[str, float | np.ndarray] = field(default_factory=dict)
+    fixed: Mapping[str, float | np.ndarray] = unit_field(
+        "m^-3", default_factory=dict, array=True
+    )
     gas_temperature: float = unit_field("eV", 0.025)
     electron_temperature: float | None = unit_field("eV", None)
     boundaries: dict[str, dict[str, Boundary]] = field(default_factory=dict)
     potential: dict[str, PotentialBoundary] = field(default_factory=dict)
-    heating: float | np.ndarray = 0.0
-    sources: Mapping[str, float | np.ndarray] = field(default_factory=dict)
+    heating: float | np.ndarray = unit_field("W / m^3", 0.0, array=True)
+    sources: Mapping[str, float | np.ndarray] = unit_field(
+        "m^-3 / s", default_factory=dict, array=True
+    )
     volume_sources: Sequence[VolumeSource] = ()
 
     def __post_init__(self) -> None:
         """Check the species and index the unknowns."""
         convert_units(self)
-        self.fixed = {
-            k: to_array(v, "m^-3", f"fixed[{k!r}]") for k, v in self.fixed.items()
-        }
-        self.heating = to_array(self.heating, "W / m^3", "heating")
-        self.sources = {
-            k: to_array(v, "m^-3 / s", f"sources[{k!r}]")
-            for k, v in self.sources.items()
-        }
         if self.length <= 0.0 or self.cells < 3:
             raise ValueError("need length > 0 and at least 3 cells")
         names = [s.name for s in self.species]
@@ -688,17 +684,12 @@ class Fluid1D:
         (eV), ``phi`` (V) and fluxes (m^-2 s^-1) take Quantities or strings
         such as ``"3 eV"`` too.
         """
-        densities = {
-            k: to_array(v, "m^-3", f"densities[{k!r}]") for k, v in densities.items()
-        }
+        densities = to_array(densities, "m^-3", "densities")
         electron_temperature = to_array(
             electron_temperature, "eV", "electron_temperature"
         )
         potential = to_array(potential, "V", "potential")
-        fluxes = {
-            k: to_array(v, "m^-2 / s", f"fluxes[{k!r}]")
-            for k, v in (fluxes or {}).items()
-        }
+        fluxes = dict(to_array(fluxes or {}, "m^-2 / s", "fluxes"))
         u = np.zeros((self.cells, self._nvar))
         for k, name in enumerate(self._names):
             u[:, k] = np.log(

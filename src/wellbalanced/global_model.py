@@ -45,7 +45,7 @@ import numpy as np
 import xarray as xr
 from methodcard import Rule, method
 from plasmacoll.constants import BOLTZMANN, ELECTRON_MASS, ELEMENTARY_CHARGE
-from plasmacoll.units import convert_units, to_array, to_unit, unit_field
+from plasmacoll.units import convert_units, to_array, to_unit, unit_field, unit_metadata
 from scipy.integrate import solve_ivp
 from scipy.optimize import root
 from scope_profiler import profile
@@ -105,8 +105,8 @@ class Cusp:
     """
 
     # dataclasses.field: the name field is the cusp's field here
-    field: float = dataclasses.field(metadata={"unit": "T"})
-    line_length: float = dataclasses.field(metadata={"unit": "m"})
+    field: float = dataclasses.field(metadata=unit_metadata("T"))
+    line_length: float = dataclasses.field(metadata=unit_metadata("m"))
 
     def __post_init__(self) -> None:
         """Validate the cusp."""
@@ -187,8 +187,8 @@ class Chamber:
     The volume and areas take Quantities or strings such as ``"1 L"`` too.
     """
 
-    volume: float = field(metadata={"unit": "m^3"})
-    wall_area: float = field(metadata={"unit": "m^2"})
+    volume: float = field(metadata=unit_metadata("m^3"))
+    wall_area: float = field(metadata=unit_metadata("m^2"))
     ion_loss_area: float | None = unit_field("m^2", None)
     h_factor: float = 1.0
     cusp: Cusp | None = None
@@ -250,9 +250,9 @@ class GasTemperature:
     such as ``"300 K"`` too.
     """
 
-    wall_temperature: float = field(metadata={"unit": "eV"})
-    conductivity: float = field(metadata={"unit": "W / (m K)"})
-    diffusion_length: float = field(metadata={"unit": "m"})
+    wall_temperature: float = field(metadata=unit_metadata("eV"))
+    conductivity: float = field(metadata=unit_metadata("W / (m K)"))
+    diffusion_length: float = field(metadata=unit_metadata("m"))
     heat_capacity: float = 2.5
 
     def __post_init__(self) -> None:
@@ -474,8 +474,8 @@ class GlobalModel:
     reactions: Sequence[Reaction]
     chamber: Chamber
     power: float | Callable[[float], float] = 0.0
-    fixed: Mapping[str, float] = field(default_factory=dict)
-    feed: Mapping[str, float] = field(default_factory=dict)
+    fixed: Mapping[str, float] = unit_field("m^-3", default_factory=dict, array=True)
+    feed: Mapping[str, float] = unit_field("1 / s", default_factory=dict)
     pumping_speed: float = unit_field("m^3 / s", 0.0)
     sources: Sequence[VolumeSource] = ()
     wall_reactions: Sequence[WallReaction] = ()
@@ -488,12 +488,6 @@ class GlobalModel:
         convert_units(self)
         if not callable(self.power):
             self.power = to_unit(self.power, "W", "power")
-        self.fixed = {
-            k: to_array(v, "m^-3", f"fixed[{k!r}]") for k, v in self.fixed.items()
-        }
-        self.feed = {
-            k: to_unit(v, "1 / s", f"feed[{k!r}]") for k, v in self.feed.items()
-        }
         if not isinstance(self.gas_temperature, GasTemperature):
             self.gas_temperature = to_unit(
                 self.gas_temperature, "eV", "gas_temperature"

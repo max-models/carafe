@@ -31,13 +31,14 @@ iterated to a fixed point, so the plasma's shape comes out of the model.
 
 from __future__ import annotations
 
+import dataclasses
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
 from methodcard import method
-from plasmacoll.units import convert_units, to_array, to_unit, unit_field
+from plasmacoll.units import convert_units, to_unit, unit_field, unit_metadata
 
 from wellbalanced.driver import DriverState, RFDriver
 from wellbalanced.global_model import GlobalState
@@ -68,18 +69,13 @@ class PlasmaProfile:
     those units, or an astropy Quantity or a string such as ``"1e17 m^-3"``.
     """
 
-    electron_density: CellField
-    collision_frequency: CellField
-    electron_temperature: CellField | None = None
+    electron_density: CellField = field(metadata=unit_metadata("m^-3", array=True))
+    collision_frequency: CellField = field(metadata=unit_metadata("1/s", array=True))
+    electron_temperature: CellField | None = unit_field("eV", None, array=True)
 
     def __post_init__(self) -> None:
         """Convert quantities to the units of the fields."""
-        for name, unit in (
-            ("electron_density", "m^-3"),
-            ("collision_frequency", "1/s"),
-            ("electron_temperature", "eV"),
-        ):
-            object.__setattr__(self, name, to_array(getattr(self, name), unit, name))
+        convert_units(self)
 
     def settings(self) -> dict[str, Any]:
         """The keyword arguments of `InductiveField2D` this plasma sets."""
@@ -152,7 +148,7 @@ class DriverCoupling:
 
     field: Callable[[PlasmaProfile], InductiveField2D]
     plasma: Callable[[float], tuple[PlasmaProfile, Any]]
-    network_resistance: float = unit_field("Ohm")
+    network_resistance: float = dataclasses.field(metadata=unit_metadata("Ohm"))
     depth: float | None = unit_field("m", None)
 
     def __post_init__(self) -> None:
