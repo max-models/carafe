@@ -70,7 +70,7 @@ import xarray as xr
 from methodcard import Rule, method
 from plasmacoll import ChargeStateTransitions, charge_state_fractions
 from plasmacoll.constants import ATOMIC_MASS, ELECTRON_MASS, ELEMENTARY_CHARGE
-from plasmacoll.units import convert_units, to_array, to_unit, unit_field
+from plasmacoll.units import convert_units, to_array, to_unit, unit_field, unit_metadata
 from scope_profiler import profile
 
 from wellbalanced._profiling import _PROFILE_TAGS
@@ -153,9 +153,9 @@ class FastBeam:
     ``"1 MeV"``, ``"10 A"`` or ``"2.014 u"`` too.
     """
 
-    energy: float = field(metadata={"unit": "eV"})
-    current: float = field(metadata={"unit": "A"})
-    mass: float = field(metadata={"unit": "kg"})
+    energy: float = field(metadata=unit_metadata("eV"))
+    current: float = field(metadata=unit_metadata("A"))
+    mass: float = field(metadata=unit_metadata("kg"))
     initial: Mapping[str, float] = field(default_factory=lambda: {"-": 1.0})
 
     def __post_init__(self) -> None:
@@ -214,8 +214,8 @@ class BeamData:
     """
 
     transitions: ChargeStateTransitions
-    gas_ionization: Mapping[str, float] = field(default_factory=dict)
-    secondary_energy: Mapping[str, float] = field(default_factory=dict)
+    gas_ionization: Mapping[str, float] = unit_field("m^2", default_factory=dict)
+    secondary_energy: Mapping[str, float] = unit_field("eV", default_factory=dict)
 
     def __post_init__(self) -> None:
         """Validate the targets and states."""
@@ -226,12 +226,7 @@ class BeamData:
             )
         if set(self.transitions.states) - set(STATE_CHARGES):
             raise ValueError(f"beam states must be among {tuple(STATE_CHARGES)}")
-        object.__setattr__(
-            self, "gas_ionization", to_unit(dict(self.gas_ionization), "m^2")
-        )
-        object.__setattr__(
-            self, "secondary_energy", to_unit(dict(self.secondary_energy), "eV")
-        )
+        convert_units(self)
         if any(e < 0.0 for e in self.secondary_energy.values()):
             raise ValueError("secondary energies must be >= 0")
 
@@ -363,16 +358,16 @@ class GasProfile:
     ``"300 K"`` too (the position and density also as Quantity arrays).
     """
 
-    position: np.ndarray
-    density: np.ndarray
-    inflow: float = field(metadata={"unit": "1 / s"})
-    temperature: float = field(metadata={"unit": "eV"})
+    position: np.ndarray = field(metadata=unit_metadata("m", array=True))
+    density: np.ndarray = field(metadata=unit_metadata("m^-3", array=True))
+    inflow: float = field(metadata=unit_metadata("1 / s"))
+    temperature: float = field(metadata=unit_metadata("eV"))
 
     def __post_init__(self) -> None:
         """Validate the profile."""
         convert_units(self)
-        z = np.asarray(to_array(self.position, "m", "position"), dtype=float)
-        n = np.asarray(to_array(self.density, "m^-3", "density"), dtype=float)
+        z = np.asarray(self.position, dtype=float)
+        n = np.asarray(self.density, dtype=float)
         if z.ndim != 1 or z.shape != n.shape or z.size < 2:
             raise ValueError("a gas profile needs matching 1D position and density")
         if np.any(np.diff(z) <= 0.0) or np.any(n < 0.0) or not np.any(n > 0.0):
@@ -622,16 +617,16 @@ class Neutralizer:
     ``"3 m"``, ``"2e21 1/s"`` or ``"350 K"`` too, converted to the units above.
     """
 
-    length: float = field(metadata={"unit": "m"})
-    width: float = field(metadata={"unit": "m"})
-    height: float = field(metadata={"unit": "m"})
+    length: float = field(metadata=unit_metadata("m"))
+    width: float = field(metadata=unit_metadata("m"))
+    height: float = field(metadata=unit_metadata("m"))
     beam: FastBeam
     data: BeamData | BeamCrossSections
     species: Sequence[Species]
     reactions: Sequence[Reaction]
     gas: str
     gas_ion: str
-    gas_inflow: float = field(metadata={"unit": "1 / s"})
+    gas_inflow: float = field(metadata=unit_metadata("1 / s"))
     atoms: Mapping[str, tuple[float, str]] = field(default_factory=dict)
     transmission: float = 1.0
     cusp: Cusp | None = None

@@ -83,7 +83,7 @@ from __future__ import annotations
 
 import warnings
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 import xarray as xr
@@ -95,6 +95,7 @@ from plasmacoll.units import (
     to_array,
     to_unit,
     unit_field,
+    unit_metadata,
 )
 from scope_profiler import profile, region
 
@@ -226,9 +227,9 @@ class Boundary:
     kind: str
     temperature: float | None = unit_field("K", None)
     accommodation: float = 1.0
-    gas_return_flux: float | np.ndarray = 0.0
+    gas_return_flux: float | np.ndarray = unit_field("m^-2 / s", 0.0, array=True)
     gas_return_temperature: float | None = unit_field("K", None)
-    metal_flux: float | np.ndarray = 0.0
+    metal_flux: float | np.ndarray = unit_field("m^-2 / s", 0.0, array=True)
     metal_energy: float = unit_field("eV", 5.0)
     metal_sticking: float = 0.0
     pressure: float | None = unit_field("Pa", None)
@@ -236,10 +237,6 @@ class Boundary:
     def __post_init__(self) -> None:
         """Convert the units and validate the kind."""
         convert_units(self)
-        self.gas_return_flux = to_array(
-            self.gas_return_flux, "m^-2 / s", "gas_return_flux"
-        )
-        self.metal_flux = to_array(self.metal_flux, "m^-2 / s", "metal_flux")
         if self.kind not in _KINDS:
             raise ValueError(f"the kind of a boundary is one of {_KINDS}")
 
@@ -301,14 +298,13 @@ class VolumeSource:
     """
 
     species: str
-    rate: float | np.ndarray
+    rate: float | np.ndarray = field(metadata=unit_metadata("m^-3 / s", array=True))
     temperature: float = unit_field("K", 300.0)
     velocity: tuple[float, float] = unit_field("m / s", (0.0, 0.0))
 
     def __post_init__(self) -> None:
         """Convert the units."""
         convert_units(self)
-        self.rate = to_array(self.rate, "m^-3 / s", "rate")
 
 
 @dataclass
@@ -333,19 +329,18 @@ class IonExchange:
     """
 
     species: str
-    frequency: float | np.ndarray
+    frequency: float | np.ndarray = field(metadata=unit_metadata("1 / s", array=True))
     ion_velocity: tuple[float | np.ndarray, float | np.ndarray] = (0.0, 0.0)
-    ion_temperature: float | np.ndarray = 300.0
+    ion_temperature: float | np.ndarray = unit_field("K", 300.0, array=True)
 
     def __post_init__(self) -> None:
         """Convert the units."""
-        self.frequency = to_array(self.frequency, "1 / s", "frequency")
+        convert_units(self)
         if isinstance(self.ion_velocity, str) or is_quantity(self.ion_velocity):
             self.ion_velocity = to_array(self.ion_velocity, "m / s", "ion_velocity")
         self.ion_velocity = tuple(
             to_array(u, "m / s", "ion_velocity") for u in self.ion_velocity
         )
-        self.ion_temperature = to_array(self.ion_temperature, "K", "ion_temperature")
 
 
 @dataclass
@@ -367,13 +362,12 @@ class ThermalRelaxation:
     Both take astropy Quantities or strings such as ``"1e4 1/s"`` too.
     """
 
-    frequency: float | np.ndarray
+    frequency: float | np.ndarray = field(metadata=unit_metadata("1 / s", array=True))
     temperature: float = unit_field("K", 300.0)
 
     def __post_init__(self) -> None:
         """Convert the units."""
         convert_units(self)
-        self.frequency = to_array(self.frequency, "1 / s", "frequency")
 
 
 @dataclass(frozen=True)

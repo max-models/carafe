@@ -61,7 +61,7 @@ import numpy as np
 import xarray as xr
 from methodcard import Rule, method
 from plasmacoll.constants import ATOMIC_MASS, ELECTRON_MASS, ELEMENTARY_CHARGE
-from plasmacoll.units import convert_units, to_unit, unit_field
+from plasmacoll.units import convert_units, to_unit, unit_field, unit_metadata
 from scipy.special import wofz
 
 from wellbalanced.dispersion.eigenmodes import (
@@ -147,11 +147,11 @@ class Plasma:
     also takes an astropy Quantity or a string such as ``"20 mT"`` or ``"3 eV"``.
     """
 
-    density: float = field(metadata={"unit": "m^-3"})
-    e_field: float = field(metadata={"unit": "V / m"})
-    b_field: float = field(metadata={"unit": "T"})
-    electron_temperature: float = field(metadata={"unit": "eV"})
-    density_length: float = field(metadata={"unit": "m"})
+    density: float = field(metadata=unit_metadata("m^-3"))
+    e_field: float = field(metadata=unit_metadata("V / m"))
+    b_field: float = field(metadata=unit_metadata("T"))
+    electron_temperature: float = field(metadata=unit_metadata("eV"))
+    density_length: float = field(metadata=unit_metadata("m"))
     field_length: float = unit_field("m", np.inf)
     e_field_length: float = unit_field("m", np.inf)
     electron_collision_frequency: float = unit_field("1 / s", 0.0)

@@ -532,14 +532,8 @@ class Fluid2D:
         )
         wall_potential = to_unit(wall_potential, "V", "wall_potential")
         ion_mean_free_path = to_unit(ion_mean_free_path, "m", "ion_mean_free_path")
-        fixed = {
-            name: to_array(value, "m^-3", f"fixed[{name!r}]")
-            for name, value in (fixed or {}).items()
-        }
-        sources = {
-            name: to_array(value, "m^-3 s^-1", f"sources[{name!r}]")
-            for name, value in (sources or {}).items()
-        }
+        fixed = to_array(fixed, "m^-3", "fixed")
+        sources = to_array(sources, "m^-3 s^-1", "sources")
         heating = to_array(heating, "W/m^3", "heating")
         if electron_force is not None:
             electron_force = (
@@ -1313,10 +1307,9 @@ class Fluid2D:
         The gas of a neutral model (`wellbalanced.spatial.couple_neutrals`):
         ``densities`` replace those of fixed species by name (cell fields).
         """
-        for name, value in (densities or {}).items():
+        for name, value in to_array(densities or {}, "m^-3", "densities").items():
             if name not in self._fixed:
                 raise ValueError(f"{name!r} is not a fixed species")
-            value = to_array(value, "m^-3", f"densities[{name!r}]")
             self._fixed[name] = self._on_cells(value)
         temperature = to_unit(temperature, "eV", "temperature")
         if temperature is not None:

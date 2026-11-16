@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from plasmacoll.constants import ATOMIC_MASS, ELECTRON_MASS
-from plasmacoll.units import convert_units, to_unit
+from plasmacoll.units import convert_units, to_unit, unit_metadata
 
 __all__ = ["ELECTRON", "Species"]
 
@@ -24,7 +24,7 @@ class Species:
     """
 
     name: str
-    mass: float = field(metadata={"unit": "kg"})
+    mass: float = field(metadata=unit_metadata("kg"))
     charge: int = 0
 
     def __post_init__(self) -> None:

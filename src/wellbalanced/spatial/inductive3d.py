@@ -71,7 +71,7 @@ import numpy as np
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
 from methodcard import Rule, method
-from plasmacoll.units import convert_units, to_unit, unit_field
+from plasmacoll.units import convert_units, to_unit, unit_field, unit_metadata
 from scipy.constants import mu_0 as MU_0
 
 from wellbalanced.spatial.cutcell import cut_cells as cut_cells_of
@@ -161,7 +161,7 @@ class Conductor3D:
     """
 
     shapes: Sequence[Any]
-    conductivity: float = field(metadata={"unit": "S/m"})
+    conductivity: float = field(metadata=unit_metadata("S/m"))
     name: str = ""
 
     def __post_init__(self) -> None:
@@ -217,7 +217,7 @@ class ImpedanceConductor3D:
     """
 
     shapes: Sequence[Any]
-    conductivity: float = field(metadata={"unit": "S/m"})
+    conductivity: float = field(metadata=unit_metadata("S/m"))
     name: str = ""
 
     def __post_init__(self) -> None:
