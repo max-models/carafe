@@ -24,7 +24,21 @@ al. 2019 and Boeuf 2022/2023). Species:
   ionization wave;
 - the **electron energy** ``w = 3/2 n T_e`` with Joule heating, the enthalpy flux of
   Hagelaar and Pitchford (2005) and three loss channels (elastic, ionization,
-  excitation), or a fixed ``T_e``.
+  excitation), or a fixed ``T_e``;
+- optionally (``metal``, a `wellbalanced.magnetron.TargetMaterial`) the **sputtered metal**:
+  neutral atoms ``M`` sputtered from the cathode by the ion fluxes into it,
+  ``Gamma_M = Y_Ar |Gamma_Ar+| + Y_M |Gamma_M+|`` (self-sputtering by the metal ions),
+  carried away from the cathode as a beam at the speed ``metal_speed``, ionized by
+  electron impact (the Lotz rate by default; its energy is an electron energy loss) and by
+  charge exchange with ``Ar+``; and the singly charged **metal ions** ``M+``, a second ion
+  fluid with its own mass and the momentum equation of the argon ions, in Poisson's
+  equation and in the current. The cathode then emits ``gamma_Ar |Gamma_Ar+| + gamma_M
+  |Gamma_M+|`` electrons (unless ``cathode_current_density`` is given): the secondary yield
+  depends on the ion species. A singly charged ion of most metals carries too little
+  potential energy to release an electron from its own target (it needs ``E_iz > 2 W``),
+  so ``gamma_M`` is small and a discharge that turns to self-sputtering loses its
+  secondary emission (Anders et al., arXiv:1305.5453; doubly charged metal ions, which do
+  emit, are not modelled).
 
 Closures (what the 1D runaway diagnosis changed; see the changelog): the electron
 momentum-transfer rate is a function of ``T_e`` (not a constant), excitation is an explicit
@@ -95,8 +109,19 @@ the momentum rate gives 1.3e-13 m^3/s at 3 eV, close to the ``nu_en = 2e7 /s`` t
 quotes at 0.6 Pa; replace all three with rates from plasmacoll's cross sections), the
 ion friction, the single lumped excitation level (11.56 eV) and ``secondary_emission``.
 
-Not yet: electron inertia, an electron-ion or ion-ion collision operator, sputtered
-metal (no HiPIMS), the curvature of the race track, a gas temperature equation.
+PLACEHOLDERS of the metal: every number of the `TargetMaterial` but the mass and the
+ionization energy (sputter and secondary yields, the charge-exchange rate; see
+`wellbalanced.magnetron.MATERIALS`, to take from SRIM and Depla et al. 2006), the Lotz rate
+(a factor of two), ``metal_speed`` and the use of the argon ``ion_friction_rate`` for the
+metal ions.
+
+Not yet: electron inertia, an electron-ion or ion-ion collision operator, the curvature of
+the race track, a gas temperature equation. Of the metal: doubly charged ions, electron
+collisions with the metal atoms (no momentum transfer or excitation; only the ionization
+energy is lost), the sputter wind on the gas (only through ``refill_rate``), the energy
+distribution and the azimuthal spread of the sputtered atoms (a beam along ``x``), the
+redeposition of metal ions on the anode (they leave there) and the ion-energy dependence of
+the yields (one number per species, at the cathode-fall energy).
 """
 
 from __future__ import annotations
@@ -116,6 +141,7 @@ from scope_profiler import profile
 
 from wellbalanced._profiling import _PROFILE_TAGS
 from wellbalanced.datasets import variable
+from wellbalanced.magnetron import TargetMaterial, lotz_ionization
 
 __all__ = [
     "DriftFluid2D",
@@ -268,6 +294,10 @@ class DriftFluid2DState:
         electron_temperature: ``T_e`` (eV).
         potential: ``phi`` (V).
         time: Time (s).
+        metal_density: The sputtered metal atoms ``M`` (m^-3), ``None`` without a metal.
+        metal_ion_density: The metal ions ``M+`` (m^-3), ``None`` without a metal.
+        metal_ion_velocity: ``(v_x, v_y)`` of the metal ions, shape ``(2, nx, ny)`` (m/s),
+            ``None`` without a metal.
     """
 
     x: np.ndarray
@@ -279,9 +309,16 @@ class DriftFluid2DState:
     electron_temperature: np.ndarray
     potential: np.ndarray
     time: float = 0.0
+    metal_density: np.ndarray | None = None
+    metal_ion_density: np.ndarray | None = None
+    metal_ion_velocity: np.ndarray | None = None
 
     def copy(self) -> DriftFluid2DState:
         """A deep copy."""
+
+        def copied(value):
+            return None if value is None else value.copy()
+
         return DriftFluid2DState(
             self.x,
             self.y,
@@ -292,6 +329,9 @@ class DriftFluid2DState:
             self.electron_temperature.copy(),
             self.potential.copy(),
             self.time,
+            copied(self.metal_density),
+            copied(self.metal_ion_density),
+            copied(self.metal_ion_velocity),
         )
 
     def to_dataset(self) -> xr.Dataset:
@@ -314,6 +354,20 @@ class DriftFluid2DState:
             ),
             "potential": variable(dims, self.potential, "potential", "V"),
         }
+        if self.metal_density is not None:
+            data["metal_density"] = variable(
+                dims, self.metal_density, "metal atom density", "m^-3"
+            )
+        if self.metal_ion_density is not None and self.metal_ion_velocity is not None:
+            data["metal_ion_density"] = variable(
+                dims, self.metal_ion_density, "metal ion density", "m^-3"
+            )
+            data["metal_ion_velocity_x"] = variable(
+                dims, self.metal_ion_velocity[0], "metal ion velocity along x", "m/s"
+            )
+            data["metal_ion_velocity_y"] = variable(
+                dims, self.metal_ion_velocity[1], "metal ion velocity along y", "m/s"
+            )
         coords = {
             "x": ("x", self.x, {"long_name": "x (axial)", "units": "m"}),
             "y": ("y", self.y, {"long_name": "y (azimuthal)", "units": "m"}),
@@ -837,16 +891,20 @@ def _ssp_problem() -> ConvergenceProblem:
         "electrons": r"\boldsymbol\Gamma_e = -\mu_\perp\begin{pmatrix}1 & -h \\ h & 1\end{pmatrix}\big(n\mathbf E + \nabla(n T_e)\big), \qquad h = \frac{\omega_{ce}}{\nu}, \quad \mu_\perp = \frac{e\nu}{m_e(\nu^2 + \omega_{ce}^2)}",
         "collisions": r"\nu = k_{en}(T_e) N + \alpha\frac{\omega_{ce}}{16}\left[\frac{1}{1 + (B/B_*)^4}\right]",
         "ions": r"\partial_t n_i + \nabla\cdot(n_i\mathbf v) = \nu_\mathrm{iz} N n_e, \qquad \partial_t\mathbf v + \mathbf v\cdot\nabla\mathbf v = \frac{e}{M}\mathbf E - k_{in} N\mathbf v - \frac{e T_i}{M n_i}\nabla n_i",
-        "gas": r"\partial_t N = -d\,\nu_\mathrm{iz} N n_e + \nu_r (N_0 - N)",
-        "energy": r"\partial_t w = -\nabla\cdot\mathbf q - s\,\boldsymbol\Gamma_e\cdot\mathbf E - 3\frac{m_e}{M}\nu_{en} n_e (T_e - T_i) - \varepsilon_\mathrm{iz} K_\mathrm{iz} N n_e - \varepsilon_\mathrm{ex} K_\mathrm{ex} N n_e",
-        "poisson": r"\varepsilon_0\nabla^2\phi = -e(n_i - n_e)",
+        "gas": r"\partial_t N = -d\,\nu_\mathrm{iz} N n_e + d\,k_{cx} M n_i + \nu_r (N_0 - N)",
+        "energy": r"\partial_t w = -\nabla\cdot\mathbf q - s\,\boldsymbol\Gamma_e\cdot\mathbf E - 3\frac{m_e}{M}\nu_{en} n_e (T_e - T_i) - \varepsilon_\mathrm{iz} K_\mathrm{iz} N n_e - \varepsilon_\mathrm{ex} K_\mathrm{ex} N n_e - \varepsilon_\mathrm{M} K_\mathrm{M} M n_e",
+        "poisson": r"\varepsilon_0\nabla^2\phi = -e(n_i + n_{M^+} - n_e)",
+        "metal": r"\partial_t M + v_M\partial_x M = -K_\mathrm{M}(T_e) M n_e - k_{cx} M n_i, \qquad v_M M\big|_{x=0} = Y_\mathrm{Ar}|\Gamma_{\mathrm{Ar}^+}| + Y_\mathrm{M}|\Gamma_{\mathrm{M}^+}|",
+        "metal_ions": r"\partial_t n_{M^+} + \nabla\cdot(n_{M^+}\mathbf v_{M^+}) = K_\mathrm{M} M n_e + k_{cx} M n_i, \qquad \partial_t\mathbf v_{M^+} + \mathbf v_{M^+}\cdot\nabla\mathbf v_{M^+} = \frac{e}{M_\mathrm{M}}\mathbf E - k_{in} N\mathbf v_{M^+} - \frac{e T_i}{M_\mathrm{M} n_{M^+}}\nabla n_{M^+}",
+        "emission": r"\Gamma_e\big|_{x=0} = \gamma_\mathrm{Ar}|\Gamma_{\mathrm{Ar}^+}| + \gamma_\mathrm{M}|\Gamma_{\mathrm{M}^+}| \quad \text{or the prescribed } j_{e0}/e",
         "upwind3": r"n^+_{j-1/2} = \frac{-n_{j-2} + 5 n_{j-1} + 2 n_j}{6}, \qquad n^-_{j-1/2} = \frac{2 n_{j-1} + 5 n_j - n_{j+1}}{6}",
     },
     assumptions=(
         r"the plane $(x, y)$, $B = B_z(x)$, periodic $y$; inertialess electrons; the energy flux the same operator on $w$ with $\tfrac53$",
         r"cell-centred finite volumes on a uniform grid: electrons third-order upwind-biased (by the lagged drift), ions and $\mathbf v\cdot\nabla\mathbf v$ first-order upwind",
         r"$\mu_\perp$, $h$ on the faces from the face gas and $B(x_f)$; rates held at their 0.5 and 100 eV values outside",
-        r"no electron inertia, no electron-ion or ion-ion collisions, no metal, no race-track curvature, no gas temperature",
+        r"no electron inertia, no electron-ion or ion-ion collisions, no race-track curvature, no gas temperature",
+        r"the metal (opt-in, `metal`): a beam of atoms along $x$ at `metal_speed` from the cathode, outflow at the anode; singly charged ions only (doubly charged ones, the efficient emitters, are left out); no electron collisions with $M$ but its ionization; yields one number per ion species; all its numbers but the mass and $E_\mathrm{iz}$ PLACEHOLDERS",
     ),
     references=(
         "[Hagelaar and Pitchford, Plasma Sources Sci. Technol. 14, 722 (2005)](https://doi.org/10.1088/0963-0252/14/4/011)",
@@ -858,6 +916,7 @@ def _ssp_problem() -> ConvergenceProblem:
         argon_momentum_rate,
         uniform_plasma_roots,
         boeuf_dispersion_roots,
+        lotz_ionization,
     ),
 )
 @dataclass
@@ -933,9 +992,24 @@ class DriftFluid2D:
             the classical cross-field transport of the fluid is too small; the cathode
             region, where the confinement makes the discharge, keeps its classical value.
         external_sources: Volume sources added to the time derivative of an unknown
-            (``"ne"``, ``"ni"``, ``"N"``, ``"vx"``, ``"vy"``, ``"w"``), numbers or arrays
-            on the cells, per unit time. `stationary_sources` returns the ones
-            that make a given state stationary.
+            (``"ne"``, ``"ni"``, ``"N"``, ``"vx"``, ``"vy"``, ``"w"``, and with a metal
+            ``"M"``, ``"nm"``, ``"vmx"``, ``"vmy"``), numbers or arrays on the cells, per unit
+            time. `stationary_sources` returns the ones that make a given state stationary.
+        metal: The target material (a `wellbalanced.magnetron.TargetMaterial`, e.g.
+            ``MATERIALS["Ti"]``), or ``None`` (the default) for argon alone. With a metal the
+            state carries the metal atoms and ions, the cathode is sputtered by
+            ``argon_yield`` atoms per ``Ar+`` and ``self_yield`` per ``M+``, and emits
+            ``argon_secondary`` electrons per ``Ar+`` and ``self_secondary`` per ``M+``
+            (``secondary_emission`` is then not used); ``charge_exchange`` is the rate of
+            ``Ar+ + M -> Ar + M+``. PLACEHOLDER: the yields and rates of `MATERIALS`.
+        metal_speed: The axial speed (m/s) at which the sputtered atoms leave the cathode and
+            cross the gap: a beam along ``x``, absorbed at the anode. PLACEHOLDER: between the
+            thermal speed of the gas (about 400 m/s) and that of a sputtered atom of a few eV
+            (several km/s); it sets the metal density for a given sputtered flux.
+        metal_ionization_rate: Electron-impact ionization rate coefficient of the metal
+            (m^3/s) as a function of ``T_e`` (eV); by default the Lotz rate of the material
+            (`wellbalanced.magnetron.lotz_ionization`, good to a factor of about two). Each
+            ionization costs the electrons the material's ``ionization_energy``.
 
     The physical settings take astropy Quantities or strings such as ``"2 cm"``,
     ``"20 mT"`` or ``"300 K"`` too, converted to the units above (a magnetic field
@@ -977,6 +1051,9 @@ class DriftFluid2D:
     bohm: float = 0.0
     bohm_below: float | None = unit_field("T", None)
     external_sources: dict[str, np.ndarray] = field(default_factory=dict)
+    metal: TargetMaterial | None = None
+    metal_speed: float = unit_field("m / s", 1.0e3)
+    metal_ionization_rate: Callable[[Any], Any] | None = None
 
     def _build_poisson_pattern(self) -> None:
         """Fix the sparsity of the Poisson matrix: its entries are linear in the face coefficients.
@@ -1150,6 +1227,16 @@ class DriftFluid2D:
             raise ValueError("need at least 4 cells in each direction")
         if self.periodic_x and self.field_bc is None:
             raise ValueError("periodic_x needs field_bc, the uniform axial field")
+        if self.metal is not None:
+            if self.periodic_x:
+                raise ValueError("a metal needs the cathode: not with periodic_x")
+            if self.metal_speed <= 0.0:
+                raise ValueError("metal_speed must be > 0")
+            self.metal_mass = self.metal.mass_u * ATOMIC_MASS - ELECTRON_MASS
+            if self.metal_ionization_rate is None:
+                self.metal_ionization_rate = lotz_ionization(
+                    self.metal.ionization_energy, self.metal.outer_electrons
+                )
         self.dx = self.length_x / self.nx
         self.dy = self.length_y / self.ny
         self.x = (np.arange(self.nx) + 0.5) * self.dx
@@ -1203,12 +1290,16 @@ class DriftFluid2D:
         electron_temperature: float | None = None,
         gas_density: float | np.ndarray | None = None,
         potential: np.ndarray | None = None,
+        metal_density: float | np.ndarray = 0.0,
+        metal_ion_density: float | np.ndarray = 0.0,
     ) -> DriftFluid2DState:
         """A quasi-neutral plasma of ``density`` (a number or an ``(nx, ny)`` array).
 
         The potential is the vacuum one (linear between the electrodes) unless given.
         The densities (m^-3), ``T_e`` (eV) and potential (V) take Quantities or strings
-        such as ``"1e15 m^-3"`` too.
+        such as ``"1e15 m^-3"`` too. With a ``metal``, ``density`` is that of the argon ions,
+        the metal atoms and ions start at ``metal_density`` and ``metal_ion_density`` (none by
+        default) at rest, and the electrons at the sum of the ion densities.
         """
         density = to_array(density, "m^-3", "density")
         electron_temperature = to_array(
@@ -1218,6 +1309,20 @@ class DriftFluid2D:
         potential = to_array(potential, "V", "potential")
         shape = (self.nx, self.ny)
         n = np.broadcast_to(np.asarray(density, dtype=float), shape).copy()
+        metal = {}
+        ne = n
+        if self.metal is not None:
+            metal_density = to_array(metal_density, "m^-3", "metal_density")
+            metal_ion_density = to_array(metal_ion_density, "m^-3", "metal_ion_density")
+            nm = np.broadcast_to(np.asarray(metal_ion_density, dtype=float), shape)
+            metal = {
+                "metal_density": np.broadcast_to(
+                    np.asarray(metal_density, dtype=float), shape
+                ).copy(),
+                "metal_ion_density": nm.copy(),
+                "metal_ion_velocity": np.zeros((2, *shape)),
+            }
+            ne = n + nm
         te = electron_temperature
         if te is None:
             te = self.electron_temperature if self.electron_temperature else 3.0
@@ -1233,12 +1338,13 @@ class DriftFluid2D:
         return DriftFluid2DState(
             self.x,
             self.y,
-            n,
+            ne,
             n.copy(),
             np.zeros((2, *shape)),
             np.broadcast_to(np.asarray(gas, dtype=float), shape).copy(),
             np.broadcast_to(np.asarray(te, dtype=float), shape).copy(),
             np.asarray(potential, dtype=float).copy(),
+            **metal,
         )
 
     def _bohm_nu(self, omega):
@@ -1264,8 +1370,13 @@ class DriftFluid2D:
             return gas * self.momentum_rate(te)
         return gas
 
-    def _energy_loss(self, ne: np.ndarray, te: np.ndarray, gas: np.ndarray, gas_c):
-        """Electron energy loss rate (eV m^-3 s^-1): elastic, ionization and excitation."""
+    def _energy_loss(
+        self, ne: np.ndarray, te: np.ndarray, gas: np.ndarray, gas_c, metal=None
+    ):
+        """Electron energy loss rate (eV m^-3 s^-1): elastic, ionization and excitation.
+
+        With the metal atom density ``metal`` its ionization energy is lost too.
+        """
         elastic = (
             3.0
             * ELECTRON_MASS
@@ -1279,6 +1390,14 @@ class DriftFluid2D:
         if self.excitation_rate is not None:
             loss = (
                 loss + self.excitation_energy_ev * self.excitation_rate(te) * gas * ne
+            )
+        if metal is not None and self.metal is not None:
+            assert self.metal_ionization_rate is not None
+            loss = loss + (
+                self.metal.ionization_energy
+                * self.metal_ionization_rate(te)
+                * metal
+                * ne
             )
         return loss
 
@@ -1382,16 +1501,29 @@ class DriftFluid2D:
         return gam_x, nyf * vyf
 
     def _cathode_flux(
-        self, ion_flux: np.ndarray, ne=None, te=None, gas=None, ex=None, ey=None
+        self,
+        ion_flux: np.ndarray,
+        ne=None,
+        te=None,
+        gas=None,
+        ex=None,
+        ey=None,
+        metal_ion_flux=None,
     ) -> np.ndarray:
         """Electron flux into the domain at the cathode, for the ion flux ``ion_flux`` (< 0).
 
+        With a ``metal`` the secondary yield depends on the species: ``argon_secondary``
+        per ``Ar+`` of ``ion_flux`` and ``self_secondary`` per ``M+`` of ``metal_ion_flux``.
         With ``cathode_absorbs`` (and the cell state ``ne``, ``te``, ``gas`` and the field
         ``ex``, ``ey`` on the cathode face) the drift of the first cell into the cathode,
         where it points that way, is taken off.
         """
         if self.cathode_current_density is not None:
             emitted = np.full_like(ion_flux, self.cathode_current_density / E)
+        elif self.metal is not None:
+            emitted = -self.metal.argon_secondary * ion_flux
+            if metal_ion_flux is not None:
+                emitted = emitted - self.metal.self_secondary * metal_ion_flux
         else:
             emitted = -self.secondary_emission * ion_flux
         if not self.cathode_absorbs or ne is None or te is None or gas is None:
@@ -1450,9 +1582,20 @@ class DriftFluid2D:
     # -- the potential ----------------------------------------------------------------
 
     @profile("wellbalanced.DriftFluid2D.solve_potential", tags=_PROFILE_TAGS)
-    def _solve_potential(self, ne, ni, te, gas, dtau, gam_ix, gam_iy, lagged):
-        """Implicit-permittivity Poisson solve for the potential at the end of an Euler step."""
+    def _solve_potential(
+        self, ne, ni, te, gas, dtau, gam_ix, gam_iy, lagged, metal_ions=None
+    ):
+        """Implicit-permittivity Poisson solve for the potential at the end of an Euler step.
+
+        ``metal_ions`` is ``(n_M+, Gamma_x, Gamma_y)`` of the metal ions, or ``None``.
+        """
         nx, ny = self.nx, self.ny
+        metal_flux_x = None
+        ion_x, ion_y, ions = gam_ix, gam_iy, ni
+        if metal_ions is not None:
+            nm, gam_mx, gam_my = metal_ions
+            metal_flux_x = gam_mx[0]
+            ion_x, ion_y, ions = gam_ix + gam_mx, gam_iy + gam_my, ni + nm
         gas_xf, gas_yf = self._face_gas(gas)
         (mu_xf, h_xf), (mu_yf, h_yf) = self._collisions(gas_xf, gas_yf)
         n_xf, n_yf = self._face_densities(ne, mu_xf, h_xf, mu_yf, h_yf, lagged)
@@ -1469,19 +1612,27 @@ class DriftFluid2D:
         syy = EPSILON_0 + dtau * sig_y
         syx = dtau * sig_y * h_yf
         # known current: ions, electron pressure part, and the electrode boundary fluxes
-        jk_x = E * gam_ix + E * mu_xf * (dpx_xf - h_xf * dpy_xf)
-        jk_y = E * gam_iy + E * mu_yf * (dpy_yf + h_yf * dpx_yf)
+        jk_x = E * ion_x + E * mu_xf * (dpx_xf - h_xf * dpy_xf)
+        jk_y = E * ion_y + E * mu_yf * (dpy_yf + h_yf * dpx_yf)
         if not self.periodic_x:
             anode = self._anode_flux(ne, te, gas, lagged[0][-1], lagged[1][-1])
             cathode = self._cathode_flux(
-                gam_ix[0], ne, te, gas, lagged[0][0], lagged[1][0]
+                gam_ix[0],
+                ne,
+                te,
+                gas,
+                lagged[0][0],
+                lagged[1][0],
+                metal_ion_flux=metal_flux_x,
             )
-            jk_x[0] = E * gam_ix[0] - E * cathode
-            jk_x[nx] = E * gam_ix[nx] - E * anode
+            jk_x[0] = E * ion_x[0] - E * cathode
+            jk_x[nx] = E * ion_x[nx] - E * anode
         div_jk = self._divx @ jk_x.ravel() + self._divy @ jk_y.ravel()
-        rho = E * (ni - ne).ravel()
+        rho = E * (ions - ne).ravel()
         src_e = self.external_sources.get("ne", 0.0)
         src_i = self.external_sources.get("ni", 0.0)
+        if metal_ions is not None:
+            src_i = src_i + self.external_sources.get("nm", 0.0)
         rho = rho + dtau * E * np.ravel(np.broadcast_to(src_i - src_e, ne.shape))
         bx, bc = self._affine()
         coefficients = np.concatenate(
@@ -1519,6 +1670,55 @@ class DriftFluid2D:
         )
         return vx * dfx + vy * dfy
 
+    def _ion_momentum(self, n, vx, vy, gas, mass, ecx, ecy):
+        """``d v / d t`` of an ion fluid of ``mass``: field, friction, pressure, upwind advection."""
+        n_safe = np.maximum(n, N_FLOOR)
+        nu_i = self.ion_friction_rate * gas
+        c = E / mass
+        grad_nx = self._dx_cell(n)
+        grad_ny = (np.roll(n, -1, axis=1) - np.roll(n, 1, axis=1)) / (2.0 * self.dy)
+        t_over_m = self.ion_temperature * E / mass
+        adv_x = self._advect(vx, vx, vy)
+        adv_y = self._advect(vy, vx, vy)
+        # semi-implicit friction: dv/dt = F - nu v, evaluated for the Euler step dtau
+        dvx = c * ecx - t_over_m * grad_nx / n_safe - adv_x - nu_i * vx
+        dvy = c * ecy - t_over_m * grad_ny / n_safe - adv_y - nu_i * vy
+        return dvx, dvy
+
+    def _sputtered_flux(self, argon_flux, metal_flux):
+        """Metal atoms sputtered into the gap per unit area and time, from the ion fluxes (< 0)."""
+        assert self.metal is not None
+        return -(
+            self.metal.argon_yield * argon_flux + self.metal.self_yield * metal_flux
+        )
+
+    def _metal_fluxes(self, atoms, sputtered):
+        """Axial fluxes of the metal atoms on the x-faces: the sputtered flux in, upwind beam."""
+        flux = np.empty(self._shape_xf)
+        flux[0] = sputtered
+        flux[1:] = self.metal_speed * atoms
+        return flux
+
+    def _metal_rhs(self, u, du, te, gam_ix, gam_mx, gam_my, ecx, ecy):
+        """Add the metal atoms and ions to the time derivatives ``du`` (in place)."""
+        assert self.metal is not None and self.metal_ionization_rate is not None
+        atoms, nm, ne, ni = u["M"], u["nm"], u["ne"], u["ni"]
+        ionized = self.metal_ionization_rate(te) * atoms * ne
+        exchanged = self.metal.charge_exchange * atoms * ni
+        sputtered = self._sputtered_flux(gam_ix[0], gam_mx[0])
+        beam = self._metal_fluxes(atoms, sputtered)
+        div_m = (self._divx @ gam_mx.ravel() + self._divy @ gam_my.ravel()).reshape(
+            ne.shape
+        )
+        du["ne"] = du["ne"] + ionized
+        du["ni"] = du["ni"] - exchanged
+        du["N"] = du["N"] + self.depletion * exchanged
+        du["M"] = -(beam[1:] - beam[:-1]) / self.dx - ionized - exchanged
+        du["nm"] = -div_m + ionized + exchanged
+        du["vmx"], du["vmy"] = self._ion_momentum(
+            nm, u["vmx"], u["vmy"], u["N"], self.metal_mass, ecx, ecy
+        )
+
     # -- the right-hand side -----------------------------------------------------------
 
     def _rhs(self, u: dict, phi_prev: np.ndarray, dtau: float):
@@ -1533,12 +1733,26 @@ class DriftFluid2D:
         gas_c = self._collision_gas(gas, te)
         prev = self._fields(phi_prev)
         gam_ix, gam_iy = self._ion_fluxes(ni, (vx, vy))
-        phi = self._solve_potential(ne, ni, te, gas_c, dtau, gam_ix, gam_iy, prev)
+        metal = "M" in u
+        metal_ions = metal_flux_x = None
+        if metal:
+            gam_mx, gam_my = self._ion_fluxes(u["nm"], (u["vmx"], u["vmy"]))
+            metal_ions = (u["nm"], gam_mx, gam_my)
+            metal_flux_x = gam_mx[0]
+        phi = self._solve_potential(
+            ne, ni, te, gas_c, dtau, gam_ix, gam_iy, prev, metal_ions
+        )
         fields = self._fields(phi)
         gam_x, gam_y, _ = self._electron_like_flux(ne, te, fields, gas_c, lagged=prev)
         if not self.periodic_x:
             gam_x[0] = self._cathode_flux(
-                gam_ix[0], ne, te, gas_c, prev[0][0], prev[1][0]
+                gam_ix[0],
+                ne,
+                te,
+                gas_c,
+                prev[0][0],
+                prev[1][0],
+                metal_ion_flux=metal_flux_x,
             )
             # explicit in the field, as in the Poisson solve, so the discrete charge
             # balance is exact
@@ -1557,25 +1771,19 @@ class DriftFluid2D:
         )
         du = {"ne": -div_e + rate, "ni": -div_i + rate}
         du["N"] = -self.depletion * rate + self.refill_rate * (self.gas_density - gas)
-        # ion momentum: field, friction, pressure, upwind advection
-        ni_safe = np.maximum(ni, N_FLOOR)
-        nu_i = self.ion_friction_rate * gas
-        c = E / self.ion_mass
-        grad_nx = self._dx_cell(ni)
-        grad_ny = (np.roll(ni, -1, axis=1) - np.roll(ni, 1, axis=1)) / (2.0 * self.dy)
-        t_over_m = self.ion_temperature * E / self.ion_mass
-        adv_x = self._advect(vx, vx, vy)
-        adv_y = self._advect(vy, vx, vy)
-        # semi-implicit friction: dv/dt = F - nu v, evaluated for the Euler step dtau
-        du["vx"] = c * ecx - t_over_m * grad_nx / ni_safe - adv_x - nu_i * vx
-        du["vy"] = c * ecy - t_over_m * grad_ny / ni_safe - adv_y - nu_i * vy
+        du["vx"], du["vy"] = self._ion_momentum(
+            ni, vx, vy, gas, self.ion_mass, ecx, ecy
+        )
+        if metal:
+            assert metal_ions is not None
+            self._metal_rhs(u, du, te, gam_ix, *metal_ions[1:], ecx, ecy)
         if energy:
             q_x, q_y, _ = self._electron_like_flux(
                 ne * te * 1.5, te, fields, gas_c, scale=5.0 / 3.0, lagged=prev
             )
             if not self.periodic_x:
                 # the emitted electrons at their energy, the returned ones at 2 T_e
-                emitted = self._cathode_flux(gam_ix[0])
+                emitted = self._cathode_flux(gam_ix[0], metal_ion_flux=metal_flux_x)
                 q_x[0] = 2.0 * self.secondary_energy_ev * emitted + 2.0 * te[0] * (
                     gam_x[0] - emitted
                 )
@@ -1586,12 +1794,15 @@ class DriftFluid2D:
             gcx = 0.5 * (gam_x[:-1] + gam_x[1:])
             gcy = 0.5 * (gam_y + np.roll(gam_y, -1, axis=1))
             joule = -(gcx * ecx + gcy * ecy)
-            loss = self._energy_loss(ne, te, gas, gas_c)
+            metal_atoms = u.get("M")
+            loss = self._energy_loss(ne, te, gas, gas_c, metal_atoms)
             du["w"] = -div_q + self.heating_scale * joule - loss
             # d(loss)/dw for the implicit treatment of the loss in `_euler`
             te_up = te * 1.001
             dloss = (
-                self._energy_loss(ne, te_up, gas, self._collision_gas(gas, te_up))
+                self._energy_loss(
+                    ne, te_up, gas, self._collision_gas(gas, te_up), metal_atoms
+                )
                 - loss
             ) / (1.5 * np.maximum(ne, N_FLOOR) * 0.001 * te)
             du["_dloss"] = np.maximum(dloss, 0.0)
@@ -1612,6 +1823,16 @@ class DriftFluid2D:
         }
         if self.electron_temperature is None:
             u["w"] = 1.5 * state.electron_density * state.electron_temperature
+        if self.metal is not None:
+            if state.metal_density is None or state.metal_ion_density is None:
+                raise ValueError("a model with a metal needs a state with the metal")
+            velocity = state.metal_ion_velocity
+            if velocity is None:
+                velocity = np.zeros((2, *state.electron_density.shape))
+            u["M"] = state.metal_density.copy()
+            u["nm"] = state.metal_ion_density.copy()
+            u["vmx"] = velocity[0].copy()
+            u["vmy"] = velocity[1].copy()
         return u
 
     @profile("wellbalanced.DriftFluid2D.linear_modes", tags=_PROFILE_TAGS)
@@ -1757,6 +1978,13 @@ class DriftFluid2D:
             )
         else:
             te = np.full_like(u["ne"], self.electron_temperature)
+        metal = {}
+        if "M" in u:
+            metal = {
+                "metal_density": u["M"],
+                "metal_ion_density": u["nm"],
+                "metal_ion_velocity": np.array([u["vmx"], u["vmy"]]),
+            }
         return DriftFluid2DState(
             self.x,
             self.y,
@@ -1767,6 +1995,7 @@ class DriftFluid2D:
             te,
             phi,
             time,
+            **metal,
         )
 
     def _euler(self, u, phi_prev, dt):
@@ -1782,6 +2011,11 @@ class DriftFluid2D:
                 if key in ("ne", "ni", "N"):
                     clipped = np.maximum(new, N_FLOOR)
                     self.floor_added[key] += float((clipped - new).sum())
+                    new = clipped
+                elif key in ("M", "nm"):  # the metal may vanish: floored at zero
+                    clipped = np.maximum(new, 0.0)
+                    added = float((clipped - new).sum())
+                    self.floor_added[key] = self.floor_added.get(key, 0.0) + added
                     new = clipped
             out[key] = new
         return out, phi
@@ -1836,6 +2070,10 @@ class DriftFluid2D:
         vy = np.abs(mu_yf * (fields[3] + h_yf * fields[2]))
         speed_x = max(vx.max(), np.abs(state.ion_velocity[0]).max())
         speed_y = max(vy.max(), np.abs(state.ion_velocity[1]).max())
+        if self.metal is not None and state.metal_ion_velocity is not None:
+            metal_v = np.abs(state.metal_ion_velocity)
+            speed_x = max(speed_x, metal_v[0].max(), self.metal_speed)
+            speed_y = max(speed_y, metal_v[1].max())
         te = np.max(state.electron_temperature)
         sound = np.sqrt(E * (te + self.ion_temperature) / self.ion_mass)
         step = cfl / ((speed_x + sound) / self.dx + (speed_y + sound) / self.dy)
@@ -1949,12 +2187,57 @@ class DriftFluid2D:
         )
         return gx, gy
 
+    def cathode_budget(self, state: DriftFluid2DState) -> dict[str, np.ndarray]:
+        """What hits and leaves the cathode, per unit area and time along ``y`` (m^-2 s^-1).
+
+        ``"argon_ions"`` and ``"metal_ions"``: the ion fluxes into the cathode (positive);
+        ``"emitted"``: the electrons emitted (``sum_s gamma_s Gamma_s``, or the prescribed
+        current), without the absorption of ``cathode_absorbs``; ``"sputtered"``: the metal
+        atoms sputtered, ``Y_Ar Gamma_Ar+ + Y_M Gamma_M+``; ``"self_sputtering_share"``: the
+        part of them that the metal ions sputter (0 without a metal). The fluxes are those
+        the next step starts from (the ion velocities of the state).
+        """
+        gam_ix, _ = self._ion_fluxes(
+            state.ion_density, (state.ion_velocity[0], state.ion_velocity[1])
+        )
+        argon = -gam_ix[0]
+        metal = np.zeros_like(argon)
+        if self.metal is not None and state.metal_ion_density is not None:
+            assert state.metal_ion_velocity is not None
+            gam_mx, _ = self._ion_fluxes(
+                state.metal_ion_density,
+                (state.metal_ion_velocity[0], state.metal_ion_velocity[1]),
+            )
+            metal = -gam_mx[0]
+            sputtered = self._sputtered_flux(-argon, -metal)
+            from_metal = self.metal.self_yield * metal
+        else:
+            sputtered = np.zeros_like(argon)
+            from_metal = np.zeros_like(argon)
+        emitted = self._cathode_flux(-argon, metal_ion_flux=-metal)
+        share = np.divide(
+            from_metal,
+            sputtered,
+            out=np.zeros_like(argon),
+            where=sputtered > 0.0,
+        )
+        return {
+            "argon_ions": argon,
+            "metal_ions": metal,
+            "emitted": emitted,
+            "sputtered": sputtered,
+            "self_sputtering_share": share,
+        }
+
     def charge_residual(self, state: DriftFluid2DState) -> float:
         """Largest ``|eps0 div E - rho| / (e n)``: how far the state is from Poisson's equation."""
         ex_xf, _, _, ey_yf, _, _ = self._fields(state.potential)
         div_e = (self._divx @ ex_xf.ravel() + self._divy @ ey_yf.ravel()).reshape(
             state.potential.shape
         )
-        rho = E * (state.ion_density - state.electron_density)
+        ions = state.ion_density
+        if state.metal_ion_density is not None:
+            ions = ions + state.metal_ion_density
+        rho = E * (ions - state.electron_density)
         scale = E * np.maximum(state.electron_density, N_FLOOR)
         return float(np.max(np.abs(EPSILON_0 * div_e - rho) / scale))
