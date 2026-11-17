@@ -274,7 +274,11 @@ class VolumeSource:
     ``rate`` may be a function of the electron and gas temperatures in eV,
     ``rate(T_e, T_g)``, for a source that follows the plasma, e.g. sputtering
     by the ion flux to a target (``per = ("Ar+",)``, ``rate`` the Bohm flux
-    times the yield per volume). In a `wellbalanced.Fluid1D` it may
+    times the yield per volume). With ``of_densities`` it is a function of the
+    densities too, ``rate(T_e, T_g, n)`` with ``n`` the densities by name
+    (m^-3), for a source that is not a product of densities, e.g. a sputter
+    wind whose efficiency depends on the sputtered flux (global model only).
+    In a `wellbalanced.Fluid1D` it may
     also be an array on the cells, a source that varies in space. A rate that
     is not a function, and ``electron_energy``, take Quantities or strings
     such as ``"1e20 m^-3 s^-1"`` too (the rate in m^(3k-3)/s for ``k``
@@ -282,10 +286,11 @@ class VolumeSource:
     """
 
     changes: Mapping[str, int]
-    rate: float | np.ndarray | Callable[[float, float], float]
+    rate: float | np.ndarray | Callable[..., float]
     per: Sequence[str] = ()
     electron_energy: float = unit_field("eV", 0.0)
     name: str = "source"
+    of_densities: bool = False
 
     def __post_init__(self) -> None:
         """Validate the source."""
@@ -295,11 +300,22 @@ class VolumeSource:
             object.__setattr__(self, "rate", to_array(self.rate, unit, "rate"))
         if not callable(self.rate) and np.any(np.asarray(self.rate) < 0.0):
             raise ValueError("a source rate must be >= 0")
+        if self.of_densities and not callable(self.rate):
+            raise ValueError("a source of the densities needs a rate function")
         object.__setattr__(self, "changes", dict(self.changes))
         object.__setattr__(self, "per", tuple(self.per))
 
-    def coefficient(self, electron_temperature: float, gas_temperature: float) -> float:
-        """Return ``rate`` at the temperatures (eV)."""
+    def coefficient(
+        self,
+        electron_temperature: float,
+        gas_temperature: float,
+        densities: Mapping[str, float] | None = None,
+    ) -> float:
+        """Return ``rate`` at the temperatures (eV), and the densities if ``of_densities``."""
+        if self.of_densities:
+            if densities is None:
+                raise ValueError(f"{self.name}: the rate needs the densities")
+            return float(self.rate(electron_temperature, gas_temperature, densities))
         if callable(self.rate):
             return float(self.rate(electron_temperature, gas_temperature))
         if np.ndim(self.rate) and np.size(self.rate) > 1:
@@ -421,7 +437,7 @@ class GlobalState:
 @method(
     equations={
         "particles": r"\frac{dn_s}{dt} = \sum_\mathrm{reactions} \nu_s R + \sum_\mathrm{sources} c_s S - \Gamma^w_s + \sum_\mathrm{walls} (\text{products}) + \frac{F_s}{V} - \frac{n_s S_p}{V}",
-        "sources": r"S = \text{rate} \prod_\mathrm{per} n, \qquad n_e = \sum_s Z_s n_s",
+        "sources": r"S = \text{rate}(T_e, T_g\,[, n]) \prod_\mathrm{per} n, \qquad n_e = \sum_s Z_s n_s",
         "ion_wall_loss": r"\Gamma^w_i = n_i \sqrt{\frac{e T_e}{M_i}}\, \frac{A_i}{V}",
         "neutral_wall_loss": r"\Gamma^w_n = \gamma\, \frac{\bar v}{4}\, n\, \frac{A_w}{V}, \qquad \bar v = \sqrt{\frac{8 e T_g}{\pi m}}",
         "electron_wall_loss": r"\Gamma_e = \Gamma_+ + \dot q_-, \qquad \Gamma_+ = \sum_i Z_i \Gamma^w_i, \qquad \dot q_- = -\sum_\mathrm{sources} \sum_s Z_s c_s S",
@@ -580,7 +596,7 @@ class GlobalModel:
 
         source_rates = []
         for source in self.sources:
-            rate = source.coefficient(te, tg)
+            rate = source.coefficient(te, tg, n)
             for name in source.per:
                 rate *= n[name]
             source_rates.append(rate)

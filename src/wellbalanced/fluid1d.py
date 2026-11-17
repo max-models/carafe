@@ -602,6 +602,8 @@ class Fluid1D:
             unknown = (set(source.changes) | set(source.per)) - known
             if unknown:
                 raise ValueError(f"{source.name}: unknown species {sorted(unknown)}")
+            if source.of_densities:
+                raise ValueError(f"{source.name}: a source of the densities is 0D only")
             if not callable(source.rate) and np.size(source.rate) not in (
                 1,
                 self.cells,

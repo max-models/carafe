@@ -213,6 +213,28 @@ def test_a_beam_source_of_electrons_drives_the_plasma() -> None:
     )
 
 
+def test_a_source_of_the_densities_is_the_same_source_as_one_per_density() -> None:
+    """``rate(T_e, T_g, n)`` with ``of_densities``: the beam ionization written out."""
+    per = VolumeSource({"e": 1, "Ar+": 1}, 1.0e-2, per=("Ar",), name="beam")
+    written = VolumeSource(
+        {"e": 1, "Ar+": 1},
+        lambda _te, _tg, n: 1.0e-2 * n["Ar"],
+        name="beam",
+        of_densities=True,
+    )
+    expected = argon(power=50.0, sources=[per]).steady_state()
+    state = argon(power=50.0, sources=[written]).steady_state()
+    assert state.converged
+    assert state.densities["Ar+"] == pytest.approx(expected.densities["Ar+"], rel=1e-9)
+    assert state.electron_temperature == pytest.approx(
+        expected.electron_temperature, rel=1e-9
+    )
+    with pytest.raises(ValueError, match="rate function"):
+        VolumeSource({"e": 1}, 1.0, of_densities=True)
+    with pytest.raises(ValueError, match="needs the densities"):
+        written.coefficient(2.0, 0.025)
+
+
 def test_bad_models_are_refused() -> None:
     with pytest.raises(ValueError, match="electrons"):
         GlobalModel([AR, AR_ION], [], CHAMBER)

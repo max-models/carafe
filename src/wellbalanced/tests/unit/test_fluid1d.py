@@ -323,6 +323,15 @@ def test_volume_sources_are_sources_per_unit_density_with_their_energy() -> None
         )
     with pytest.raises(ValueError, match="1D model"):
         source.coefficient(2.0, 0.025)
+    with pytest.raises(ValueError, match="0D only"):
+        plasma(
+            0.05,
+            cells,
+            fixed={"Ar": gas},
+            volume_sources=[
+                VolumeSource({"e": 1}, lambda te, tg, n: 1.0, of_densities=True)
+            ],
+        )
 
 
 def test_bad_models_are_refused() -> None:

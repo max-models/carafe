@@ -15,7 +15,8 @@ heat goes into the gas).
 
 The first figure is the argon density profile in front of the target for several currents with
 cold atoms; the second its mean value against the global model's rarefaction; the third how
-the argon returns once the sputtering stops.
+the argon returns once the sputtering stops. ``examples/sputter_wind_efficiency.py`` derives
+from this gas a wind efficiency for the global model that depends on the sputtered flux.
 
 This is a demonstration of the model, not a validation. The model is the continuum limit
 (Euler with species diffusion): at 1 Pa the mean free path of argon is a few mm, so the

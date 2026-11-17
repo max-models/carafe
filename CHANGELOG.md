@@ -13,6 +13,21 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- A wind efficiency that depends on the sputtered flux: `Magnetron(wind_efficiency=...)` takes
+  a function `eta(Gamma)` of the sputtered flux at the target as well as a number, and
+  `wellbalanced.magnetron.wind_efficiency_from_gas_dynamics` derives one (`WindEfficiency`,
+  interpolated in log-log) from steady states of the compressible gas in front of the target
+  (`sputter_wind_gas`), so that the global model's argon deficit is the gas's mean deficit.
+  For the placeholder titanium magnetron at 1 Pa, `eta` falls from 0.96 at 1 A to 0.085 at 100
+  A, and the global model's rarefaction follows the gas dynamics to 0.006 from 1 to 100 A
+  (with the constant 0.3: 0.018 against 0.53 at 100 A). The gas dynamics is the continuum
+  limit at Knudsen numbers near 1: a DSMC check is still due. `examples/sputter_wind_efficiency.py`
+  shows it. A `VolumeSource` with `of_densities=True` has a rate `rate(T_e, T_g, n)` of the
+  densities (global model only), and `Magnetron.diagnostics` reports the `wind_efficiency`.
+- Tests of the magnetron global model in its limits: without sputtering any wind does nothing
+  and the argon is at its filling density, the dc particle budgets close (ionization against
+  the ion losses, per ion and in total, and the argon budget gives the rarefaction in closed
+  form), and the discharge current is the ion current to the target with its secondaries.
 - A live demo in the docs (Getting started, "Live demo"): Boeuf's gradient-drift dispersion
   relation (`boeuf_dispersion_roots`) solved in the browser with Pyodide, growth rate and phase
   speed against `k_y` with sliders for `B`, `E_0`, `T_e`, `n_0`, `L_n`, `L_B`, `nu` and the grad-B
