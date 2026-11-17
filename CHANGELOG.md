@@ -7,6 +7,11 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- A live demo in the docs (Getting started, "Live demo"): Boeuf's gradient-drift dispersion
+  relation (`boeuf_dispersion_roots`) solved in the browser with Pyodide, growth rate and phase
+  speed against `k_y` with sliders for `B`, `E_0`, `T_e`, `n_0`, `L_n`, `L_B`, `nu` and the grad-B
+  drift (`docs/src/components/wellbalanced_demo.py`). The docs build the wheels it installs, and a
+  Pyodide workflow imports every module in Pyodide and runs the demo.
 - `wellbalanced.dispersion.eigenmodes`: the nonlocal linear eigenproblem of the gradient-drift
   instability across a 1D profile (`NonlocalDispersion` on an `Equilibrium`): drift-fluid or
   inertial electrons with collisions, the Padé gyro-averaged electron response, cold ions with

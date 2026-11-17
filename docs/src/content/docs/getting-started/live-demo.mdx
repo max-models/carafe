@@ -1,0 +1,57 @@
+---
+title: Live demo
+description: The gradient-drift dispersion relation of a magnetron, solved in your browser.
+---
+
+import PyodideDemo from '@max-models/starlight-theme/components/PyodideDemo.astro';
+import code from '../../../components/wellbalanced_demo.py?raw';
+
+This page runs wellbalanced in your browser with [Pyodide](https://pyodide.org) (Python compiled
+to WebAssembly): nothing is installed and nothing is sent to a server. Move the sliders to solve
+the dispersion relation again.
+
+<PyodideDemo
+	code={code}
+	controls={[
+		{ name: 'b_field', label: 'Magnetic field <i>B</i>', min: 2, max: 30, step: 0.5, value: 6, unit: 'mT' },
+		{ name: 'e_field', label: 'Electric field <i>E</i><sub>0</sub>', min: -10000, max: -500, step: 100, value: -2200, unit: 'V/m' },
+		{ name: 'electron_temperature', label: 'Electron temperature <i>T</i><sub>e</sub>', min: 1, max: 20, step: 0.2, value: 11.4, unit: 'eV' },
+		{ name: 'density', label: 'Density <i>n</i><sub>0</sub>', min: 14, max: 18, value: 0.8e15, log: true, unit: 'm<sup>-3</sup>' },
+		{ name: 'density_length', label: 'Density gradient length <i>L</i><sub>n</sub>', min: -10, max: -0.5, step: 0.1, value: -2.2, unit: 'mm' },
+		{ name: 'field_length', label: 'Field gradient length <i>L</i><sub>B</sub>', min: -30, max: -2, step: 0.5, value: -6, unit: 'mm' },
+		{ name: 'collision_frequency', label: 'Collision frequency <i>ν</i>', min: 5, max: 8, value: 2e7, log: true, unit: 's<sup>-1</sup>' },
+		{ name: 'grad_b', label: 'Grad-B drift', options: ['on', 'off'], value: 'on' },
+	]}
+	captions={[
+		'Growth rate of the fastest root against the azimuthal wavenumber; the dot marks the fastest mode.',
+		'Phase speed along E×B of the fastest root, where it grows.',
+	]}
+	aspect={2}
+/>
+
+The relation is Boeuf's local gradient-drift relation (his Eq. (1),
+[arXiv:2211.17051](https://arxiv.org/abs/2211.17051)) for the ionisation region of a DC magnetron:
+magnetised electrons with collisions and finite Larmor radius, drifting by E×B, diamagnetic and
+grad-B drifts, unmagnetised cold ions and Poisson's equation. The sliders start at his point,
+1.8 cm from the target, where the fastest mode grows at about 10<sup>7</sup> s<sup>-1</sup> at a
+wavelength of 1.6 cm and moves at about 15 km/s, far slower than the E×B drift. The density gradient
+drives the mode and the grad-B drift of the falling field works against it: with the grad-B drift
+on, it grows fast only while |<i>L</i><sub>n</sub>| is below about |<i>L</i><sub>B</sub>|/2. Try
+<i>L</i><sub>B</sub> = −3 mm or <i>L</i><sub>n</sub> = −5 mm.
+
+The same scan as a script:
+
+```python
+import numpy as np
+
+from wellbalanced.driftfluid2d import boeuf_dispersion_roots
+
+k = np.linspace(20.0, 3000.0, 150)  # 1/m
+roots = [boeuf_dispersion_roots(kk, 0.8e15, -2200.0, 6e-3, 11.4, -2.2e-3, -6e-3, 2e7) for kk in k]
+growth = np.array([r.imag.max() for r in roots])  # 1/s
+print(f"{growth.max():.3g} /s at a wavelength of {2 * np.pi / k[growth.argmax()]:.3g} m")
+```
+
+The full local theory, with kinetic ions and the compressibility of the drifts, is
+`wellbalanced.dispersion`; the nonlocal eigenmodes across a profile are in
+`wellbalanced.dispersion.eigenmodes`.

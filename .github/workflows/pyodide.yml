@@ -1,0 +1,20 @@
+name: Pyodide
+
+# Checks that the package runs in the browser: its wheel and those of its devel dependencies
+# installed in Pyodide under Node, every module imported and the live demo of the docs
+# (docs/src/components/wellbalanced_demo.py) run with its defaults. The shared workflow of
+# max-models/starlight-theme; `npx starlight-pyodide check` in docs/ runs it locally.
+
+on:
+  push:
+    branches: ["main", "devel"]
+  pull_request:
+    branches: ["main", "devel"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pyodide:
+    uses: max-models/starlight-theme/.github/workflows/pyodide.yml@v0

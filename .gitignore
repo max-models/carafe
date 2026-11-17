@@ -175,3 +175,6 @@ junit/
 .quarto/
 README_files/
 .rnet_cache/
+
+# Wheels of the live demo, built by starlight-pyodide wheels
+docs/public/pyodide/
