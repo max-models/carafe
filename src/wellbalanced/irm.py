@@ -94,7 +94,7 @@ import dataclasses
 import warnings
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import xarray as xr
@@ -391,6 +391,14 @@ class IonizationRegion:
     warm_temperature: float = unit_field("eV", 0.1)
     hot_argon_temperature: float = unit_field("eV", 1.0)
     warm_return: float = 1.0
+    # filled in by __post_init__: the unknowns, the exit rates of the neutrals (1/s),
+    # the ions by role and the table of the reactions
+    _unknown: list[str] = field(init=False, repr=False, compare=False)
+    _exit_rate: dict[str, float] = field(init=False, repr=False, compare=False)
+    _ions: dict[str, str] = field(init=False, repr=False, compare=False)
+    _reactions: list[
+        tuple[Reaction, bool, float | None, tuple[tuple[str, int], ...]]
+    ] = field(init=False, repr=False, compare=False)
 
     def _index(self) -> None:
         """The unknowns, the ions and the reactions, computed once."""
@@ -701,7 +709,7 @@ class IonizationRegion:
         charge = sum(species[name].charge * n[name] for name in self._ions)
         n["e"] = charge - n[HOT_ELECTRONS]
         ne = max(n["e"], 1.0)
-        vd = float(voltage(t)) if callable(voltage) else float(voltage)
+        vd = float(cast(float, voltage(t) if callable(voltage) else voltage))
         f = self.voltage_fraction
         beta = self.back_attraction
 
@@ -791,7 +799,7 @@ class IonizationRegion:
         if current is None:
             drive = model_current
         else:
-            drive = float(current(t)) if callable(current) else float(current)
+            drive = float(cast(float, current(t) if callable(current) else current))
         ohmic = drive * f * vd  # W
         # d(3/2 n_e T_e)/dt = Q - 2 T_e Gamma_e, newborn electrons without energy
         net = ohmic / (E * volume) - cold_energy - 2.0 * te * electrons_out
