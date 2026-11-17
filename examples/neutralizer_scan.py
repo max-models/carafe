@@ -2,6 +2,10 @@
 
 A beam-driven plasma neutralizer: the neutral fraction against the gas flow.
 
+The beam-driven plasma neutralizer is a concept studied for DEMO, not the gas
+neutralizer of ITER's injectors, which is the same channel without the cusps
+(``cusp=None``).
+
 A 1 MeV, 10 A deuterium negative-ion beam crosses a 3 m channel. On the gas,
 and on the plasma it makes itself, it changes charge state; the plasma is a
 global model of the channel fed by the beam's stripped and secondary electrons.

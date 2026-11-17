@@ -5,6 +5,12 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- The neutralizer docs say which kind of neutralizer a channel is: without cusps the gas
+  neutralizer of ITER's injectors, with cusps the beam-driven plasma neutralizer studied for
+  DEMO (`illustrative_deuterium_neutralizer` has cusps).
+
 ### Added
 
 - `wellbalanced.dispersion.eigenmodes`: the nonlocal linear eigenproblem of the gradient-drift

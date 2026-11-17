@@ -48,7 +48,9 @@ Global (0D) and 1D fluid models of low-temperature plasmas.
   ionization sinks, wall heat exchange and a refill reservoir as inputs
   a plasma model can update; the rarefaction that spokes depend on. The
   continuum limit, so Knudsen numbers near 1 need a kinetic check.
-- **A beam-driven plasma neutralizer** (`wellbalanced.neutralizer`): a
+- **Neutralizers** (`wellbalanced.neutralizer`): the gas neutralizer of
+  ITER’s injectors and the beam-driven plasma neutralizer studied for
+  DEMO (magnetic cusps confining the plasma the beam makes, `Cusp`): a
   fast beam’s charge states on the gas and on the plasma it makes,
   coupled to a global model of the channel fed by the beam’s stripped
   and secondary electrons, iterated to a fixed point in seconds. The
