@@ -2,6 +2,9 @@
 
 A beam-driven plasma neutralizer with the gas along the channel: scans of flow and current.
 
+The channel has magnetic cusps, the DEMO concept; the gas profile is the same in ITER's gas
+neutralizer, which has none (``cusp=None``).
+
 Gas fed into the middle of a neutralizer channel flows to its two open ends as a free-molecular
 gas: a molecule hits the walls far more often than other molecules and random-walks to an end.
 So the density falls linearly from the feed, and the channel holds 3.5 times more gas than the

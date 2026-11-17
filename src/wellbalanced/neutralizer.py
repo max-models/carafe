@@ -1,4 +1,4 @@
-"""A beam-driven plasma neutralizer: the beam's charge states and the plasma it makes.
+"""A gas or beam-driven plasma neutralizer: the beam's charge states and the plasma it makes.
 
 A fast beam of negative ions crosses a channel of length ``L`` and cross section
 ``w h`` filled with gas. On the gas, and on the plasma the beam itself makes,
@@ -20,6 +20,16 @@ ionization of the gas by a fast particle feeds the plasma, which a
   ``gas_ionization[s]``) makes an ion and a secondary electron of mean
   energy ``secondary_energy[s]``: the mean of its energy distribution, e.g.
   Rudd's (`plasmacoll.RuddIonization`), at the beam's energy.
+
+Two kinds of neutralizer share the model. The neutral-beam injectors of ITER use a
+gas neutralizer: channels of D2 gas in which the beam makes a weak plasma that nothing
+confines (``cusp=None``, the default of `Neutralizer`); its stripping is negligible and
+the neutral fraction stays at the gas limit, 55-60 % for 1 MeV D-. The beam-driven
+plasma neutralizer, a concept studied for DEMO (G. Starnella, TUM 2022; Veronese et
+al., Fusion Eng. Des. 2023), puts magnetic cusps on the side walls (`Cusp`) to confine
+that plasma, so that it strips the beam too and raises the neutral fraction, by how
+much depending on the ionization degree it reaches. `illustrative_deuterium_neutralizer`
+has cusps, so its examples are the second kind; pass ``cusp=None`` for the first.
 
 The sources are functions of the local beam (`Neutralizer.beam_sources`):
 with a particle flux ``Gamma`` (beam particles per m^2 and s), the fractions
@@ -1147,6 +1157,10 @@ def _arrhenius(a: float, c: float):
 
 def illustrative_deuterium_neutralizer(**overrides: Any) -> Neutralizer:
     """A deuterium neutralizer channel with illustrative numbers, not data.
+
+    The channel has magnetic cusps on its side walls, so it is a beam-driven plasma
+    neutralizer (a DEMO concept); ``cusp=None`` makes it a gas neutralizer as in ITER's
+    injectors (see the module docstring).
 
     The cross sections and rates are round numbers of plausible size, chosen so
     that a gas target alone gives at most about 0.6 neutrals near
