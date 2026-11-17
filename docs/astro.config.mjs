@@ -20,6 +20,7 @@ export default defineDocs({
 			'wellbalanced.neutralizer': 'Neutralizer',
 			'wellbalanced.driver': 'RF driver (0D)',
 			'wellbalanced.magnetron': 'Magnetron',
+			'wellbalanced.irm': 'Ionization region model',
 			'wellbalanced.fluid1d': 'Fluid 1D',
 			'wellbalanced.spatial.grid': 'Cell grid',
 			'wellbalanced.spatial.fluid': 'Fluid 2D',

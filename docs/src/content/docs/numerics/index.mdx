@@ -37,7 +37,15 @@ shows how they fit together.
    **[RF driver](/wellbalanced/numerics/driver/)** (the transformer model of the coil, with
    Nagaoka's coefficient and the exact solenoid as reference) and the
    **[magnetron](/wellbalanced/numerics/magnetron/)** (the ionization region with sputtering,
-   the sputter wind and secondary-electron heating).
+   the sputter wind and secondary-electron heating). The
+   **[ionization region model](/wellbalanced/numerics/irm/)** (IRM) of a HiPIMS pulse is the
+   fuller version of the magnetron: thermal and hot electrons, cold, warm and hot argon with
+   metastables and Ar2+, the metal with M+ and M2+, ohmic heating by the share $f$ of the
+   discharge voltage over the region and back-attraction $\beta_t$ of the ions to the target,
+   driven by the measured $I_D(t)$ and $V_D(t)$; $(\beta_t, f)$ are fitted to the discharge
+   current:
+
+<MethodCard name="wellbalanced.irm.IonizationRegion" headingLevel={3} />
 
 ## The fluid models
 

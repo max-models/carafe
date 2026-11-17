@@ -43,6 +43,18 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   digitized), `Equilibrium.model_state` a model state at other densities.
   `examples/nonlocal_eigenmodes.py` shows it on Boeuf's state. `wellbalanced.dispersion` is now a
   package; its imports are unchanged.
+- `wellbalanced.irm`: the ionization region model (IRM) of a HiPIMS pulse (Raadu et al. 2011,
+  Huo et al. 2017, Gudmundsson et al. 2022 for copper) as `IonizationRegion`, an own module on
+  the `Reaction` framework and the magnetron's rate fits: thermal electrons with an energy
+  equation and hot secondary electrons at a fixed temperature, cold, warm and hot argon,
+  metastables, `Ar+`, `Ar2+`, the metal with `M+` and `M2+`; ohmic heating by `V_IR = f V_D`,
+  back-attraction `beta_t` of the ions, sputter yields `a E^b` and secondary electron yields
+  per ion (`IRMTarget`), rate coefficients from functions (`IRMRates`). Driven by `I_D(t)` and
+  `V_D(t)` (`evolve`, or by the voltage alone); returns `alpha_t`, the ionized flux fraction,
+  the self-sputtering share and the rarefaction. `IonizationRegion.fit` fits `(beta_t, f)` to a
+  measured discharge current. The rate coefficients, yields and geometry are placeholders
+  (the argon set of Huo et al. / Rudolph et al. and Freund et al.'s copper ionization are the
+  intended data). `examples/irm_copper_pulse.py` fits a synthetic copper pulse.
 - `DriftFluid2D.linear_modes(frozen=("ionization_frequency",))`: the ionization frequency held
   at its base value while the source follows `n_e`, the consistent form of the nonlocal solvers.
   `examples/spoke_linear_settled.py` relaxes the 1D state with a chosen anode closure and Bohm

@@ -58,6 +58,7 @@ from wellbalanced.global_model import (
     VolumeSource,
     WallReaction,
 )
+from wellbalanced.irm import IonizationRegion
 from wellbalanced.magnetron import MATERIALS, Magnetron, TargetMaterial
 from wellbalanced.reactions import Reaction
 from wellbalanced.spatial import (
@@ -102,6 +103,7 @@ __all__ = [
     "InductiveField2D",
     "InductiveField3D",
     "InductiveSolution",
+    "IonizationRegion",
     "MATERIALS",
     "Magnetron",
     "PlasmaRegion",
