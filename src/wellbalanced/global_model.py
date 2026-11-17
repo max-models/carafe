@@ -315,7 +315,8 @@ class VolumeSource:
         if self.of_densities:
             if densities is None:
                 raise ValueError(f"{self.name}: the rate needs the densities")
-            return float(self.rate(electron_temperature, gas_temperature, densities))
+            rate: Callable[..., float] = self.rate  # type: ignore[assignment]
+            return float(rate(electron_temperature, gas_temperature, densities))
         if callable(self.rate):
             return float(self.rate(electron_temperature, gas_temperature))
         if np.ndim(self.rate) and np.size(self.rate) > 1:

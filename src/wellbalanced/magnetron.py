@@ -504,8 +504,8 @@ class Magnetron:
             raise ValueError("h_factor must be in (0, 1]")
         if self.heating_fraction < 0.0:
             raise ValueError("heating_fraction must be >= 0")
-        constant_wind = not callable(self.wind_efficiency)
-        if (constant_wind and self.wind_efficiency < 0.0) or self.seed < 0.0:
+        wind = self.wind_efficiency
+        if (not callable(wind) and wind < 0.0) or self.seed < 0.0:
             raise ValueError("wind_efficiency and seed must be >= 0")
         if not self.material.verified:
             warnings.warn(
@@ -1065,13 +1065,10 @@ class WindEfficiency:
         # log eta, floored so that a point of zero efficiency stays finite
         floor = 1.0e-12 * max(float(efficiency.max()), 1.0e-300)
         log_efficiency = np.log(np.maximum(efficiency, floor))
+        interpolant: Callable[[np.ndarray], np.ndarray]
         if flux.size == 1:
-
-            def interpolant(
-                x: np.ndarray, value: float = log_efficiency[0]
-            ) -> np.ndarray:
-                return np.full_like(x, value)
-
+            value = float(log_efficiency[0])
+            interpolant = lambda x: np.full_like(x, value)  # noqa: E731
         else:
             interpolant = PchipInterpolator(np.log(flux), log_efficiency)
         object.__setattr__(self, "_interpolant", interpolant)
@@ -1112,7 +1109,8 @@ def sputter_wind_gas(
     metal_mass = magnetron.material.mass_u * ATOMIC_MASS
 
     def diffusion(t: np.ndarray, p: np.ndarray) -> np.ndarray:
-        return binary_diffusion(ARGON_MASS, metal_mass, WIND_COLLISION_DIAMETER, t, p)
+        diameter = WIND_COLLISION_DIAMETER
+        return np.asarray(binary_diffusion(ARGON_MASS, metal_mass, diameter, t, p))
 
     model = GasDynamics(
         magnetron.region_height,
@@ -1185,19 +1183,20 @@ def wind_efficiency_from_gas_dynamics(
     diffusion coefficient, conductivity and side-wall cooling of the default gas are
     placeholders.
     """
-    fluxes = np.sort(np.asarray(to_array(fluxes, "m^-2 / s", "fluxes"), float).ravel())
-    if gas is None:
+    points = np.sort(np.asarray(to_array(fluxes, "m^-2 / s", "fluxes"), float).ravel())
 
-        def gas(flux: float) -> GasDynamics:
-            return sputter_wind_gas(magnetron, flux)
+    def default_gas(flux: float) -> GasDynamics:
+        return sputter_wind_gas(magnetron, flux)
+
+    build = default_gas if gas is None else gas
 
     fill = magnetron.gas_density
     scale = magnetron.region_height * fill / magnetron.refill_time
     deficits, efficiencies = [], []
-    for flux in fluxes:
-        model = gas(float(flux))
+    for flux in points:
+        model = build(float(flux))
         state = model.steady_state(tolerance=tolerance, max_time=max_time)
         deficit = 1.0 - float(np.mean(state.gas_number)) / fill
         deficits.append(deficit)
         efficiencies.append(max(deficit, 0.0) * scale / flux)
-    return WindEfficiency(tuple(fluxes), tuple(efficiencies), tuple(deficits))
+    return WindEfficiency(tuple(points), tuple(efficiencies), tuple(deficits))
