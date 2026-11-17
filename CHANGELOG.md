@@ -13,6 +13,18 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `wellbalanced.irm`: the ionization region model (IRM) of a HiPIMS pulse (Raadu et al. 2011,
+  Huo et al. 2017, Gudmundsson et al. 2022 for copper) as `IonizationRegion`, an own module on
+  the `Reaction` framework and the magnetron's rate fits: thermal electrons with an energy
+  equation and hot secondary electrons at a fixed temperature, cold, warm and hot argon,
+  metastables, `Ar+`, `Ar2+`, the metal with `M+` and `M2+`; ohmic heating by `V_IR = f V_D`,
+  back-attraction `beta_t` of the ions, sputter yields `a E^b` and secondary electron yields
+  per ion (`IRMTarget`), rate coefficients from functions (`IRMRates`). Driven by `I_D(t)` and
+  `V_D(t)` (`evolve`, or by the voltage alone); returns `alpha_t`, the ionized flux fraction,
+  the self-sputtering share and the rarefaction. `IonizationRegion.fit` fits `(beta_t, f)` to a
+  measured discharge current. The rate coefficients, yields and geometry are placeholders
+  (the argon set of Huo et al. / Rudolph et al. and Freund et al.'s copper ionization are the
+  intended data). `examples/irm_copper_pulse.py` fits a synthetic copper pulse.
 - A live demo in the docs (Getting started, "Live demo"): Boeuf's gradient-drift dispersion
   relation (`boeuf_dispersion_roots`) solved in the browser with Pyodide, growth rate and phase
   speed against `k_y` with sliders for `B`, `E_0`, `T_e`, `n_0`, `L_n`, `L_B`, `nu` and the grad-B
