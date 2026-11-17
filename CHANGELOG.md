@@ -18,6 +18,11 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   ionization is the gas model's argon sink, the ions reaching the target return as argon from the
   target wall, the ion friction on the gas is optional, and the gas sets the plasma's `N`.
   `examples/spoke_gas_coupled.py` compares it with the relaxation closure on Boeuf's 1D state.
+- A live demo in the docs (Getting started, "Live demo"): Boeuf's gradient-drift dispersion
+  relation (`boeuf_dispersion_roots`) solved in the browser with Pyodide, growth rate and phase
+  speed against `k_y` with sliders for `B`, `E_0`, `T_e`, `n_0`, `L_n`, `L_B`, `nu` and the grad-B
+  drift (`docs/src/components/wellbalanced_demo.py`). The docs build the wheels it installs, and a
+  Pyodide workflow imports every module in Pyodide and runs the demo.
 - A wind efficiency that depends on the sputtered flux: `Magnetron(wind_efficiency=...)` takes
   a function `eta(Gamma)` of the sputtered flux at the target as well as a number, and
   `wellbalanced.magnetron.wind_efficiency_from_gas_dynamics` derives one (`WindEfficiency`,
@@ -33,11 +38,6 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   and the argon is at its filling density, the dc particle budgets close (ionization against
   the ion losses, per ion and in total, and the argon budget gives the rarefaction in closed
   form), and the discharge current is the ion current to the target with its secondaries.
-- A live demo in the docs (Getting started, "Live demo"): Boeuf's gradient-drift dispersion
-  relation (`boeuf_dispersion_roots`) solved in the browser with Pyodide, growth rate and phase
-  speed against `k_y` with sliders for `B`, `E_0`, `T_e`, `n_0`, `L_n`, `L_B`, `nu` and the grad-B
-  drift (`docs/src/components/wellbalanced_demo.py`). The docs build the wheels it installs, and a
-  Pyodide workflow imports every module in Pyodide and runs the demo.
 - `wellbalanced.dispersion.eigenmodes`: the nonlocal linear eigenproblem of the gradient-drift
   instability across a 1D profile (`NonlocalDispersion` on an `Equilibrium`): drift-fluid or
   inertial electrons with collisions, the Padé gyro-averaged electron response, cold ions with
