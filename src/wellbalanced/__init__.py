@@ -47,6 +47,7 @@ from wellbalanced.fluid1d import (
     FluidState,
     PotentialBoundary,
 )
+from wellbalanced.gas_coupling import GasCoupledDriftFluid
 from wellbalanced.gasdynamics import GasDynamics, GasState
 from wellbalanced.global_model import (
     Chamber,
@@ -92,6 +93,7 @@ __all__ = [
     "Fluid2D",
     "FluidSpecies",
     "FluidState",
+    "GasCoupledDriftFluid",
     "GasDynamics",
     "GasState",
     "GasTemperature",
