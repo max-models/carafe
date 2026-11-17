@@ -23,7 +23,10 @@ Huo et al., *J. Phys. D* 46, 045204, 2013: the ionization region model):
 - **Gas**: Ar is fed and flows out on the time ``refill_time``, so it relaxes
   to its filling density. With ``wind_efficiency`` ``eta``, every sputtered atom
   also pushes ``eta`` Ar atoms out of the region (the sputter wind), the
-  rarefaction that limits the discharge current of a HiPIMS pulse.
+  rarefaction that limits the discharge current of a HiPIMS pulse. ``eta`` may
+  also be a function of the sputtered flux, e.g. a `WindEfficiency` derived from
+  the compressible gas (`wind_efficiency_from_gas_dynamics`): the constant
+  makes the rarefaction too strong at high current.
 - **Heating**: a share ``heating_fraction`` of the energy ``e V_D`` that the
   secondary electrons (``gamma``) gain in the cathode fall goes into the plasma
   electrons, ``P = f gamma / (1 + gamma) I_D V_D``: the prescribed discharge
@@ -66,12 +69,25 @@ from dataclasses import dataclass, field
 import numpy as np
 import xarray as xr
 from methodcard import Rule, method
-from plasmacoll.constants import BOLTZMANN, ELECTRON_MASS, ELEMENTARY_CHARGE
+from plasmacoll.constants import (
+    ATOMIC_MASS,
+    BOLTZMANN,
+    ELECTRON_MASS,
+    ELEMENTARY_CHARGE,
+)
 from plasmacoll.units import convert_units, to_array, to_unit, unit_field, unit_metadata
+from scipy.interpolate import PchipInterpolator
 from scipy.optimize import brentq
 from scipy.special import exp1
 
 from wellbalanced.datasets import stack, variable
+from wellbalanced.gasdynamics import (
+    ARGON_MASS,
+    Boundary,
+    GasDynamics,
+    ThermalRelaxation,
+    binary_diffusion,
+)
 from wellbalanced.global_model import (
     Chamber,
     GlobalModel,
@@ -88,11 +104,14 @@ __all__ = [
     "TITANIUM",
     "Magnetron",
     "TargetMaterial",
+    "WindEfficiency",
     "argon_elastic",
     "argon_excitation",
     "argon_ionization",
     "lotz_ionization",
     "pulse",
+    "sputter_wind_gas",
+    "wind_efficiency_from_gas_dynamics",
 ]
 
 E = ELEMENTARY_CHARGE
@@ -399,7 +418,7 @@ def pulse(
 @method(
     equations={
         "geometry": r"V = A_t h_r, \qquad A_w = 2A_t + A_s, \qquad A_\mathrm{loss} = A_t + A_s",
-        "sputtering": r"S_M = Y\, \frac{h\, u_B(T_e) A_t}{V}\, n_i \quad (Y_\mathrm{Ar} \text{ per Ar}^+,\ Y_M \text{ per M}^+), \qquad S_\mathrm{wind} = -\eta_w S_M \text{ (Ar)}",
+        "sputtering": r"S_M = Y\, \frac{h\, u_B(T_e) A_t}{V}\, n_i \quad (Y_\mathrm{Ar} \text{ per Ar}^+,\ Y_M \text{ per M}^+), \qquad S_\mathrm{wind} = -\eta_w(\Gamma) S_M \text{ (Ar)}, \quad \Gamma = \frac{S_M V}{A_t}",
         "gas": r"F_\mathrm{Ar} = \frac{n_\mathrm{fill} V}{\tau}, \qquad \text{Ar} \to \varnothing \text{ at the rate } \frac{1}{\tau}",
         "heating": r"P = f\, \frac{\gamma}{1 + \gamma}\, I_D(t)\, V_D(t)",
         "currents": r"I_i = e\, n_i\, h\, u_B A_t, \qquad I_D = \sum_i (1 + \gamma_i)\, I_i",
@@ -408,6 +427,7 @@ def pulse(
         r"the ionization region as a `GlobalModel` of e, Ar, Ar$^+$, M, M$^+$; metal sticks at the walls, Ar$^+$ returns as Ar",
         r"no metastables, no multiply charged ions, no gas heating; a drive by the voltage alone has no steady state",
         r"yields, secondary yields, charge exchange and the geometry are placeholders (`MATERIALS`)",
+        r"$\eta_w$ a number, or a function of the sputtered flux (`wind_efficiency_from_gas_dynamics`)",
     ),
     references=(
         "[Raadu et al., Plasma Sources Sci. Technol. 20, 065007 (2011)](https://doi.org/10.1088/0963-0252/20/6/065007)",
@@ -438,7 +458,10 @@ class Magnetron:
         pressure: The argon filling pressure in Pa, at ``gas_temperature``.
         gas_temperature: The gas temperature in K.
         refill_time: The time in s in which the argon of the region is replaced.
-        wind_efficiency: Ar atoms pushed out per sputtered atom (0: no sputter wind).
+        wind_efficiency: Ar atoms pushed out per sputtered atom (0: no sputter
+            wind): a number, or a function ``eta(Gamma)`` of the sputtered flux
+            ``Gamma`` at the target in m^-2 s^-1, e.g. a `WindEfficiency` from
+            `wind_efficiency_from_gas_dynamics`.
         heating_fraction: The share of the secondary electron energy the plasma
             electrons keep: at most 1 if the secondary electron yield is right;
             a larger value, as `calibrate_heating` may find, means the yield
@@ -461,7 +484,7 @@ class Magnetron:
     pressure: float = unit_field("Pa", 1.0)
     gas_temperature: float = unit_field("K", 300.0)
     refill_time: float = unit_field("s", 1.0e-4)
-    wind_efficiency: float = 0.0
+    wind_efficiency: float | Callable[[float], float] = 0.0
     heating_fraction: float = 1.0
     seed: float = unit_field("m^-3 / s", 1.0e19)
 
@@ -481,7 +504,8 @@ class Magnetron:
             raise ValueError("h_factor must be in (0, 1]")
         if self.heating_fraction < 0.0:
             raise ValueError("heating_fraction must be >= 0")
-        if self.wind_efficiency < 0.0 or self.seed < 0.0:
+        wind = self.wind_efficiency
+        if (not callable(wind) and wind < 0.0) or self.seed < 0.0:
             raise ValueError("wind_efficiency and seed must be >= 0")
         if not self.material.verified:
             warnings.warn(
@@ -585,6 +609,24 @@ class Magnetron:
             ),
         ]
 
+    def _sputtered(self, te: float, densities: Mapping[str, float]) -> float:
+        """The sputtered atoms per unit volume and time (m^-3 s^-1) at ``T_e`` and densities."""
+        s = self.species
+        m = self.material
+        rate = 0.0
+        for role, sputter in (("gas_ion", m.argon_yield), ("metal_ion", m.self_yield)):
+            name = s[role].name
+            rate += sputter * self.bohm_flux_coefficient(te, name) * densities[name]
+        return rate
+
+    def _flux_wind(
+        self, te: float, _tg: float, densities: Mapping[str, float]
+    ) -> float:
+        """The Ar pushed out by a flux-dependent wind (m^-3 s^-1): ``eta(Gamma) S_M``."""
+        sputtered = self._sputtered(te, densities)
+        flux = sputtered * self.volume / self.target_area
+        return float(self.wind_efficiency(flux)) * sputtered  # type: ignore[operator]
+
     def sources(self) -> list[VolumeSource]:
         """Sputtering and the sputter wind by the ion flux to the target, and the seed."""
         s = self.species
@@ -602,7 +644,7 @@ class Magnetron:
                 return sputter * flux(te, tg)
 
             def wind(te: float, tg: float, yielded=yielded) -> float:
-                return self.wind_efficiency * yielded(te, tg)
+                return self.wind_efficiency * yielded(te, tg)  # type: ignore[operator]
 
             sources.append(
                 VolumeSource(
@@ -612,7 +654,7 @@ class Magnetron:
                     name=f"sputtering by {name}",
                 )
             )
-            if self.wind_efficiency:
+            if self.wind_efficiency and not callable(self.wind_efficiency):
                 sources.append(
                     VolumeSource(
                         {s["gas"].name: -1},
@@ -621,6 +663,15 @@ class Magnetron:
                         name=f"sputter wind of {name}",
                     )
                 )
+        if callable(self.wind_efficiency):
+            sources.append(
+                VolumeSource(
+                    {s["gas"].name: -1},
+                    self._flux_wind,
+                    name="sputter wind",
+                    of_densities=True,
+                )
+            )
         if self.seed:
             sources.append(
                 VolumeSource(
@@ -628,6 +679,13 @@ class Magnetron:
                 )
             )
         return sources
+
+    def wind_efficiency_at(self, state: GlobalState) -> float:
+        """The wind efficiency in effect in a state (the number, or ``eta(Gamma)``)."""
+        if not callable(self.wind_efficiency):
+            return float(self.wind_efficiency)
+        flux = self.target_currents(state)["sputtered"] / self.target_area
+        return float(self.wind_efficiency(flux))
 
     def heating_power(self, current: float, voltage: float) -> float:
         """The power the plasma electrons absorb at a discharge current and voltage, in W.
@@ -773,7 +831,8 @@ class Magnetron:
           metal ions make (1: the discharge runs on the metal alone);
         - ``electron_density`` in m^-3, and the electron temperature in eV;
         - ``discharge_current``: the model's ``I_D`` in A, to compare with the
-          prescribed one.
+          prescribed one;
+        - ``wind_efficiency``: the ``eta`` of the sputter wind in effect.
         """
         s = self.species
         m = self.material
@@ -791,6 +850,7 @@ class Magnetron:
             "electron_density": density["e"],
             "electron_temperature": state.electron_temperature,
             "discharge_current": currents["I_D"],
+            "wind_efficiency": self.wind_efficiency_at(state),
         }
 
     def metal_ionization(self, state: GlobalState) -> float:
@@ -947,3 +1007,196 @@ class Magnetron:
             states.append(state)
             previous = state
         return states
+
+
+# -- the sputter wind from the gas dynamics ---------------------------------------------
+
+#: The mean hard-sphere diameter of argon and the metal atoms in the diffusion of the
+#: metal through the gas, in m: PLACEHOLDER (argon 3.6, titanium 3.0 angstrom, unchecked).
+WIND_COLLISION_DIAMETER = 3.3e-10
+#: The heat conductivity of argon at 300 K in W/(m K): PLACEHOLDER, to check.
+WIND_GAS_CONDUCTIVITY = 0.02
+#: The width of the channel whose side walls cool the gas, in m: PLACEHOLDER (a free
+#: molecular heat exchange with walls this far apart, of the order of a racetrack).
+WIND_CHANNEL_WIDTH = 0.01
+#: The sputtered fluxes (m^-2 s^-1) `wind_efficiency_from_gas_dynamics` evaluates by
+#: default: about 0.5 to 150 A on the default target of 10 cm^2.
+WIND_FLUXES = (1.0e21, 3.0e21, 1.0e22, 3.0e22, 1.0e23, 4.0e23)
+
+
+@dataclass(frozen=True)
+class WindEfficiency:
+    """A wind efficiency that depends on the sputtered flux, interpolated between points.
+
+    Called with the sputtered flux ``Gamma`` at the target (m^-2 s^-1), it returns
+    ``eta(Gamma)``: a monotone cubic (PCHIP) interpolation of ``log eta`` in
+    ``log Gamma`` (a power law between two points, as ``eta ~ 1 / Gamma`` where the
+    rarefaction saturates), constant outside the range of ``flux`` (give points that
+    cover the discharge). Pass it as the ``wind_efficiency`` of a `Magnetron`.
+
+    Attributes:
+        flux: The sputtered fluxes in m^-2 s^-1, increasing.
+        efficiency: ``eta`` at each flux, >= 0.
+        deficit: The mean argon deficit ``1 - <n_Ar> / n_fill`` it was derived from, if
+            any (`wind_efficiency_from_gas_dynamics`).
+    """
+
+    flux: tuple[float, ...]
+    efficiency: tuple[float, ...]
+    deficit: tuple[float, ...] | None = None
+    _interpolant: Callable[[np.ndarray], np.ndarray] = field(
+        init=False, repr=False, compare=False
+    )
+
+    def __post_init__(self) -> None:
+        """Validate the points and set up the interpolation."""
+        flux = np.asarray(self.flux, dtype=float).reshape(-1)
+        efficiency = np.asarray(self.efficiency, dtype=float).reshape(-1)
+        if flux.size < 1 or flux.size != efficiency.size:
+            raise ValueError("flux and efficiency are points of the same length >= 1")
+        if np.any(flux <= 0.0) or np.any(np.diff(flux) <= 0.0):
+            raise ValueError("the fluxes must be > 0 and increasing")
+        if np.any(efficiency < 0.0) or not np.all(np.isfinite(efficiency)):
+            raise ValueError("a wind efficiency must be finite and >= 0")
+        object.__setattr__(self, "flux", tuple(float(f) for f in flux))
+        object.__setattr__(self, "efficiency", tuple(float(e) for e in efficiency))
+        if self.deficit is not None:
+            object.__setattr__(self, "deficit", tuple(float(d) for d in self.deficit))
+        # log eta, floored so that a point of zero efficiency stays finite
+        floor = 1.0e-12 * max(float(efficiency.max()), 1.0e-300)
+        log_efficiency = np.log(np.maximum(efficiency, floor))
+        interpolant: Callable[[np.ndarray], np.ndarray]
+        if flux.size == 1:
+            value = float(log_efficiency[0])
+            interpolant = lambda x: np.full_like(x, value)  # noqa: E731
+        else:
+            interpolant = PchipInterpolator(np.log(flux), log_efficiency)
+        object.__setattr__(self, "_interpolant", interpolant)
+
+    def __call__(self, flux: float | np.ndarray) -> float | np.ndarray:
+        """``eta`` at the sputtered flux (m^-2 s^-1); constant outside the points."""
+        values = np.asarray(flux, dtype=float)
+        log_flux = np.log(np.clip(values, self.flux[0], self.flux[-1]))
+        result = np.exp(self._interpolant(log_flux))
+        return float(result) if np.ndim(result) == 0 else result
+
+
+def sputter_wind_gas(
+    magnetron: Magnetron,
+    flux: float,
+    *,
+    metal_energy: float | None = None,
+    cells: int = 40,
+) -> GasDynamics:
+    """The gas in front of the target of a magnetron as a `wellbalanced.GasDynamics`.
+
+    One dimension along the height of the ionization region (``region_height``): the
+    target at ``x = 0`` emits ``flux`` sputtered atoms per m^2 and s, the far end is a
+    reservoir of argon at the filling pressure and the gas temperature (the refill), and
+    the side walls of a channel ``WIND_CHANNEL_WIDTH`` wide cool the gas. The atoms
+    leave with ``metal_energy`` (eV; default ``2 k T_g``: cold atoms at the gas
+    temperature, as the global model assumes). The diffusion of the metal (hard spheres
+    of ``WIND_COLLISION_DIAMETER``), the conductivity ``WIND_GAS_CONDUCTIVITY`` and
+    the channel width are placeholders. The gas starts at rest at the filling state.
+
+    This is the continuum (Euler, with species diffusion) limit: at 1 Pa the mean free
+    path of argon is a few mm, a Knudsen number of the region near 1, so a kinetic
+    (DSMC) check is due.
+    """
+    temperature = magnetron.gas_temperature
+    if metal_energy is None:
+        metal_energy = 2.0 * BOLTZMANN * temperature / E
+    metal_mass = magnetron.material.mass_u * ATOMIC_MASS
+
+    def diffusion(t: np.ndarray, p: np.ndarray) -> np.ndarray:
+        diameter = WIND_COLLISION_DIAMETER
+        return np.asarray(binary_diffusion(ARGON_MASS, metal_mass, diameter, t, p))
+
+    model = GasDynamics(
+        magnetron.region_height,
+        cells,
+        metal_mass=metal_mass,
+        diffusion=diffusion,
+        thermal_conductivity=WIND_GAS_CONDUCTIVITY,
+        boundaries={
+            "left": Boundary.wall(
+                temperature, metal_flux=flux, metal_energy=metal_energy
+            ),
+            "right": Boundary.inflow(magnetron.pressure, temperature),
+        },
+    )
+    mean_speed = np.sqrt(8.0 * BOLTZMANN * temperature / (np.pi * ARGON_MASS))
+    model.relaxation.append(
+        ThermalRelaxation(2.0 * mean_speed / (3.0 * WIND_CHANNEL_WIDTH))
+    )
+    model.set_uniform(magnetron.pressure, temperature)
+    return model
+
+
+@method(
+    equations={
+        "argon": r"\frac{dn_\mathrm{Ar}}{dt} + \frac{dn_{\mathrm{Ar}^+}}{dt} = \frac{n_\mathrm{fill} - n_\mathrm{Ar}}{\tau} - \eta_w \frac{\Gamma A_t}{V} \;\Rightarrow\; \Delta_\mathrm{0D} = 1 - \frac{n_\mathrm{Ar}}{n_\mathrm{fill}} = \frac{\eta_w \tau \Gamma}{h_r n_\mathrm{fill}}",
+        "efficiency": r"\eta_w(\Gamma_k) = \frac{\Delta_\mathrm{gas}(\Gamma_k)\, h_r n_\mathrm{fill}}{\tau \Gamma_k}, \qquad \Delta_\mathrm{gas} = 1 - \frac{\langle n_\mathrm{Ar} \rangle_x}{n_\mathrm{fill}}",
+        "interpolation": r"\ln\eta_w(\Gamma) = \mathrm{PCHIP}_k(\ln\Gamma), \quad \text{constant outside } [\Gamma_1, \Gamma_K]",
+    },
+    assumptions=(
+        r"the 0D argon budget at steady state: the ions return as neutrals and only neutrals flow out, so $n_\mathrm{Ar}$ follows from the wind alone (the seed adds $\tau S_\mathrm{seed}/n_\mathrm{fill} \lesssim 10^{-5}$)",
+        r"the gas dynamics (`sputter_wind_gas`) is the continuum (Euler) limit at Knudsen numbers near 1: a DSMC check is due",
+        r"cold sputtered atoms at the gas temperature, no return of the ions as neutrals and no ionization in the gas dynamics: $\eta_w$ is the wind alone",
+        r"$\eta_w$ absorbs the placeholder refill time $\tau$ and height $h_r$: it holds for the magnetron it was derived for",
+    ),
+    references=(
+        "Hecimovic and von Keudell, J. Phys. D 51, 453001 (2018)",
+        "[Raadu et al., Plasma Sources Sci. Technol. 20, 065007 (2011)](https://doi.org/10.1088/0963-0252/20/6/065007)",
+    ),
+    components=(GasDynamics,),
+)
+def wind_efficiency_from_gas_dynamics(
+    magnetron: Magnetron,
+    fluxes: Sequence[float] = WIND_FLUXES,
+    *,
+    gas: Callable[[float], GasDynamics] | None = None,
+    tolerance: float = 1.0e-4,
+    max_time: float = 1.0e-2,
+) -> WindEfficiency:
+    """The wind efficiency ``eta(Gamma)`` that makes the global model's rarefaction the gas's.
+
+    For each sputtered flux ``Gamma`` (m^-2 s^-1) the compressible gas in front of the
+    target (``gas(Gamma)``, default `sputter_wind_gas` of ``magnetron``) is run to its
+    steady state (`wellbalanced.GasDynamics.steady_state` with ``tolerance`` and
+    ``max_time``), and its mean argon deficit ``Delta = 1 - <n_Ar> / n_fill`` sets
+    ``eta``. In the global model's steady state the argon is fed and flows out on the
+    refill time ``tau``, the ions return as neutrals, and the wind removes
+    ``eta Gamma A_t / V``, so ``1 - n_Ar / n_fill = eta tau Gamma / (h_r n_fill)``
+    whatever the plasma; equal deficits give
+
+        eta(Gamma) = Delta(Gamma) h_r n_fill / (tau Gamma).
+
+    The result interpolates between the fluxes (`WindEfficiency`) and is for this
+    magnetron's refill time, height and pressure: pass it as its ``wind_efficiency``
+    (``dataclasses.replace(magnetron, wind_efficiency=eta)``). Each flux takes a few
+    seconds with the default gas.
+
+    The gas dynamics is the continuum (Euler) limit. At 1 Pa the mean free path of
+    argon is a few mm, so the Knudsen number of the ionization region is near 1 and a
+    kinetic (DSMC) check of this rarefaction, and so of ``eta``, is still due; the
+    diffusion coefficient, conductivity and side-wall cooling of the default gas are
+    placeholders.
+    """
+    points = np.sort(np.asarray(to_array(fluxes, "m^-2 / s", "fluxes"), float).ravel())
+
+    def default_gas(flux: float) -> GasDynamics:
+        return sputter_wind_gas(magnetron, flux)
+
+    build = default_gas if gas is None else gas
+
+    fill = magnetron.gas_density
+    scale = magnetron.region_height * fill / magnetron.refill_time
+    deficits, efficiencies = [], []
+    for flux in points:
+        model = build(float(flux))
+        state = model.steady_state(tolerance=tolerance, max_time=max_time)
+        deficit = 1.0 - float(np.mean(state.gas_number)) / fill
+        deficits.append(deficit)
+        efficiencies.append(max(deficit, 0.0) * scale / flux)
+    return WindEfficiency(tuple(points), tuple(efficiencies), tuple(deficits))

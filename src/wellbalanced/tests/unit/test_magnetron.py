@@ -16,11 +16,14 @@ from wellbalanced.magnetron import (
     TITANIUM,
     Magnetron,
     TargetMaterial,
+    WindEfficiency,
     argon_elastic,
     argon_excitation,
     argon_ionization,
     lotz_ionization,
     pulse,
+    sputter_wind_gas,
+    wind_efficiency_from_gas_dynamics,
 )
 
 E = ELEMENTARY_CHARGE
@@ -248,3 +251,157 @@ def test_reactions_are_the_listed_ones() -> None:
     assert all(isinstance(r, Reaction) for r in reactions)
     names = {r.name for r in reactions}
     assert {"Ar ionization", "Ti ionization", "charge exchange"} <= names
+
+
+# -- the limits of the model ------------------------------------------------------------
+
+
+def _inert() -> TargetMaterial:
+    """Titanium that sputters nothing and exchanges no charge."""
+    return dataclasses.replace(
+        TITANIUM, argon_yield=0.0, self_yield=0.0, charge_exchange=0.0
+    )
+
+
+def test_without_sputtering_the_wind_does_nothing_and_the_argon_is_the_plain_one() -> (
+    None
+):
+    """Zero yields: no metal, any wind efficiency, and the argon of the plain model."""
+    guess = {**Magnetron(material=_inert()).guess(), "Ti": 1.0e5, "Ti+": 1.0e3}
+    states = [
+        Magnetron(material=_inert(), wind_efficiency=wind).steady_state(
+            1.0, 500.0, guess
+        )
+        for wind in (0.0, 1.0, WindEfficiency((1.0e21, 1.0e23), (2.0, 0.5)))
+    ]
+    reference = states[0]
+    for state in states:
+        assert state.densities["Ti"] + state.densities["Ti+"] < 1.0
+        for name in ("Ar", "Ar+"):
+            assert state.densities[name] == pytest.approx(
+                reference.densities[name], rel=1e-9
+            )
+    # without the wind the neutral argon is the filling density: the ions come back
+    # as neutrals and only neutrals flow out (plus the seed's pairs, tau S_seed)
+    magnetron = Magnetron(material=_inert())
+    expected = magnetron.gas_density + magnetron.refill_time * magnetron.seed
+    assert reference.densities["Ar"] == pytest.approx(expected, rel=1e-6)
+
+
+@pytest.mark.parametrize(
+    "wind", [0.0, 0.3, WindEfficiency((1.0e21, 1.0e22, 1.0e23), (1.0, 0.7, 0.1))]
+)
+def test_dc_particle_budgets_close(wind) -> None:
+    """Ionization equals the ion losses and the argon budget gives the rarefaction."""
+    magnetron = Magnetron(wind_efficiency=wind)
+    state = magnetron.steady_state(20.0, 600.0)
+    assert state.converged
+    rates, walls = state.reaction_rates, state.wall_losses
+    seed = magnetron.seed
+    # the pairs the volume makes leave as ions through the target and the sides
+    # (charge exchange swaps an ion for an ion)
+    ionization = rates["Ar ionization"] + rates["Ti ionization"] + seed
+    assert ionization == pytest.approx(walls["Ar+"] + walls["Ti+"], rel=1e-6)
+    assert walls["e"] == pytest.approx(walls["Ar+"] + walls["Ti+"], rel=1e-9)
+    # each ion separately: Ar+ by ionization and the seed, lost to the walls and to
+    # charge exchange; Ti+ from ionization and charge exchange
+    exchange = rates["charge exchange"]
+    assert rates["Ar ionization"] + seed == pytest.approx(
+        walls["Ar+"] + exchange, rel=1e-6
+    )
+    assert rates["Ti ionization"] + exchange == pytest.approx(walls["Ti+"], rel=1e-6)
+    # the argon budget: fed n_fill / tau, out n_Ar / tau and eta Gamma A_t / V, the
+    # ions return as neutrals, so 1 - n_Ar / n_fill = eta tau Gamma / (h_r n_fill)
+    flux = magnetron.target_currents(state)["sputtered"] / magnetron.target_area
+    eta = magnetron.wind_efficiency_at(state)
+    fill, tau = magnetron.gas_density, magnetron.refill_time
+    expected = 1.0 - eta * tau * flux / (magnetron.region_height * fill)
+    expected += tau * seed / fill
+    assert magnetron.diagnostics(state)["rarefaction"] == pytest.approx(
+        expected, rel=1e-6
+    )
+    if callable(wind):
+        assert eta == pytest.approx(wind(flux))
+        assert 0.1 < eta < 1.0
+
+
+def test_the_discharge_current_is_the_ion_current_to_the_target_with_its_secondaries() -> (
+    None
+):
+    """``I_D = sum (1 + gamma_i) e Gamma_i A_t``, with the target's share of the ion losses."""
+    magnetron = Magnetron(wind_efficiency=0.3)
+    state = magnetron.steady_state(20.0, 600.0)
+    m = magnetron.material
+    share = magnetron.target_area / (magnetron.target_area + magnetron.side_area)
+    to_target = {
+        name: E * state.wall_losses[name] * share * magnetron.volume
+        for name in ("Ar+", "Ti+")
+    }
+    currents = magnetron.target_currents(state)
+    assert currents["I_Ar+"] == pytest.approx(to_target["Ar+"], rel=1e-12)
+    assert currents["I_Ti+"] == pytest.approx(to_target["Ti+"], rel=1e-12)
+    expected = (1.0 + m.argon_secondary) * to_target["Ar+"]
+    expected += (1.0 + m.self_secondary) * to_target["Ti+"]
+    assert currents["I_D"] == pytest.approx(expected, rel=1e-12)
+    # and the sputtered flux is what the ions to the target sputter
+    sputtered = (m.argon_yield * to_target["Ar+"] + m.self_yield * to_target["Ti+"]) / E
+    assert currents["sputtered"] == pytest.approx(sputtered, rel=1e-12)
+
+
+# -- the wind efficiency from the gas dynamics --------------------------------------------
+
+
+def test_a_constant_wind_efficiency_function_is_the_number() -> None:
+    number = Magnetron(wind_efficiency=0.3).steady_state(20.0, 600.0)
+    function = Magnetron(
+        wind_efficiency=WindEfficiency((1.0e21, 1.0e23), (0.3, 0.3))
+    ).steady_state(20.0, 600.0)
+    for name, density in number.densities.items():
+        assert function.densities[name] == pytest.approx(density, rel=1e-8)
+
+
+def test_the_wind_efficiency_interpolates_in_the_logs() -> None:
+    eta = WindEfficiency((1.0e21, 1.0e22, 1.0e23), (1.0, 0.5, 0.05), (0.1, 0.2, 0.3))
+    assert eta(1.0e22) == pytest.approx(0.5)
+    # constant outside the points
+    assert eta(1.0e18) == pytest.approx(1.0) and eta(1.0e25) == pytest.approx(0.05)
+    assert eta(0.0) == pytest.approx(1.0)
+    values = eta(np.geomspace(1.0e21, 1.0e23, 9))
+    assert np.all(np.diff(values) < 0.0)  # monotone between monotone points
+    # a power law between two points
+    pair = WindEfficiency((1.0e21, 1.0e23), (1.0, 0.01))
+    assert pair(1.0e22) == pytest.approx(0.1)
+    assert WindEfficiency((1.0e22,), (0.4,))(3.0e20) == pytest.approx(0.4)
+    with pytest.raises(ValueError, match="increasing"):
+        WindEfficiency((1.0e22, 1.0e21), (1.0, 1.0))
+    with pytest.raises(ValueError, match=">= 0"):
+        WindEfficiency((1.0e21, 1.0e22), (1.0, -1.0))
+    with pytest.raises(ValueError, match="same length"):
+        WindEfficiency((1.0e21, 1.0e22), (1.0,))
+    with pytest.raises(ValueError, match="wind_efficiency"):
+        Magnetron(wind_efficiency=-0.1)
+
+
+def test_the_wind_efficiency_from_the_gas_dynamics_matches_its_deficit() -> None:
+    """``eta`` makes the 0D deficit the gas's mean deficit; a coarse, cheap gas."""
+    magnetron = Magnetron()
+    fluxes = (3.0e21, 3.0e22)
+
+    def gas(flux: float):
+        return sputter_wind_gas(magnetron, flux, cells=12)
+
+    eta = wind_efficiency_from_gas_dynamics(magnetron, fluxes, gas=gas, tolerance=1e-3)
+    assert eta.flux == fluxes
+    deficits = np.array(eta.deficit)
+    assert np.all((deficits > 0.0) & (deficits < 1.0))
+    assert deficits[1] > deficits[0]  # more sputtering, more rarefaction
+    assert eta.efficiency[1] < eta.efficiency[0]  # but less per sputtered atom
+    for flux, deficit, value in zip(fluxes, deficits, eta.efficiency, strict=True):
+        zero_d = value * magnetron.refill_time * flux
+        zero_d /= magnetron.region_height * magnetron.gas_density
+        assert zero_d == pytest.approx(deficit, rel=1e-12)
+    # the gas: the target emits the flux into argon at the filling pressure
+    model = gas(fluxes[0])
+    assert model.boundaries["left"].metal_flux == fluxes[0]
+    assert model.boundaries["right"].pressure == magnetron.pressure
+    assert model.length == magnetron.region_height
