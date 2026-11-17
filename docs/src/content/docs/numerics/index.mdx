@@ -79,7 +79,9 @@ shows how they fit together.
    profile (drift-fluid, inertial or gyro-averaged electrons) describe the gradient-drift
    instability behind the spokes.
 9. **[Gas dynamics](/wellbalanced/numerics/gasdynamics/):** argon and the sputtered metal as
-   one compressible gas (MUSCL, HLLC, SSP-RK3), driven by the sputter wind.
+   one compressible gas (MUSCL, HLLC, SSP-RK3), driven by the sputter wind; the
+   **[gas and drift fluid](/wellbalanced/numerics/gas_coupling/)** are split on windows, the
+   plasma's ionization and returned ions driving the gas and the gas setting the plasma's $N$.
 10. The **[transport budget](/wellbalanced/numerics/transport/)** is a diagnostic of PIC
     moments: the $y$-averaged momentum identity of the cross-field flux.
 

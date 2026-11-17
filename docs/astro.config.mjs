@@ -35,6 +35,7 @@ export default defineDocs({
 			'wellbalanced.dispersion': 'Local dispersion',
 			'wellbalanced.dispersion.eigenmodes': 'Nonlocal eigenmodes',
 			'wellbalanced.gasdynamics': 'Gas dynamics',
+			'wellbalanced.gas_coupling': 'Gas and drift fluid',
 			'wellbalanced.transport': 'Transport budget',
 		},
 	},
