@@ -13,6 +13,11 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `GasCoupledDriftFluid` (`wellbalanced.gas_coupling`): `DriftFluid2D` with its neutral gas from
+  `GasDynamics` instead of the fixed `refill_rate`, split on windows: the plasma's window-averaged
+  ionization is the gas model's argon sink, the ions reaching the target return as argon from the
+  target wall, the ion friction on the gas is optional, and the gas sets the plasma's `N`.
+  `examples/spoke_gas_coupled.py` compares it with the relaxation closure on Boeuf's 1D state.
 - A wind efficiency that depends on the sputtered flux: `Magnetron(wind_efficiency=...)` takes
   a function `eta(Gamma)` of the sputtered flux at the target as well as a number, and
   `wellbalanced.magnetron.wind_efficiency_from_gas_dynamics` derives one (`WindEfficiency`,
