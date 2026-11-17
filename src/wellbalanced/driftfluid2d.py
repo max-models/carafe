@@ -1591,9 +1591,11 @@ class DriftFluid2D:
         """
         nx, ny = self.nx, self.ny
         metal_flux_x = None
+        ion_x, ion_y, ions = gam_ix, gam_iy, ni
         if metal_ions is not None:
             nm, gam_mx, gam_my = metal_ions
             metal_flux_x = gam_mx[0]
+            ion_x, ion_y, ions = gam_ix + gam_mx, gam_iy + gam_my, ni + nm
         gas_xf, gas_yf = self._face_gas(gas)
         (mu_xf, h_xf), (mu_yf, h_yf) = self._collisions(gas_xf, gas_yf)
         n_xf, n_yf = self._face_densities(ne, mu_xf, h_xf, mu_yf, h_yf, lagged)
@@ -1610,9 +1612,6 @@ class DriftFluid2D:
         syy = EPSILON_0 + dtau * sig_y
         syx = dtau * sig_y * h_yf
         # known current: ions, electron pressure part, and the electrode boundary fluxes
-        ion_x, ion_y = gam_ix, gam_iy
-        if metal_ions is not None:
-            ion_x, ion_y = gam_ix + gam_mx, gam_iy + gam_my
         jk_x = E * ion_x + E * mu_xf * (dpx_xf - h_xf * dpy_xf)
         jk_y = E * ion_y + E * mu_yf * (dpy_yf + h_yf * dpx_yf)
         if not self.periodic_x:
@@ -1629,7 +1628,6 @@ class DriftFluid2D:
             jk_x[0] = E * ion_x[0] - E * cathode
             jk_x[nx] = E * ion_x[nx] - E * anode
         div_jk = self._divx @ jk_x.ravel() + self._divy @ jk_y.ravel()
-        ions = ni if metal_ions is None else ni + nm
         rho = E * (ions - ne).ravel()
         src_e = self.external_sources.get("ne", 0.0)
         src_i = self.external_sources.get("ni", 0.0)
@@ -1777,7 +1775,8 @@ class DriftFluid2D:
             ni, vx, vy, gas, self.ion_mass, ecx, ecy
         )
         if metal:
-            self._metal_rhs(u, du, te, gam_ix, gam_mx, gam_my, ecx, ecy)
+            assert metal_ions is not None
+            self._metal_rhs(u, du, te, gam_ix, *metal_ions[1:], ecx, ecy)
         if energy:
             q_x, q_y, _ = self._electron_like_flux(
                 ne * te * 1.5, te, fields, gas_c, scale=5.0 / 3.0, lagged=prev
