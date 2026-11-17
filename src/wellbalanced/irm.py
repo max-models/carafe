@@ -991,7 +991,7 @@ class IonizationRegion:
     @method(
         equations={
             "residual": r"r_k(\beta_t, f) = \frac{I_D^\mathrm{model}(t_k; \beta_t, f) - I_D(t_k)}{\max_k I_D(t_k)}",
-            "fit": r"(\beta_t, f) = \arg\min \sum_k r_k^2, \qquad \beta_t \in [0, \beta_\max],\ f \in [f_\min, f_\max]",
+            "fit": r"(\beta_t, f) = \arg\min \sum_k r_k^2, \qquad \beta_t \in [0, \beta_{\max}],\ f \in [f_{\min}, f_{\max}]",
         },
         assumptions=(
             r"the model is driven by the measured $I_D(t)$ and $V_D(t)$, interpolated linearly between the samples",
