@@ -13,6 +13,11 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `GasCoupledDriftFluid` (`wellbalanced.gas_coupling`): `DriftFluid2D` with its neutral gas from
+  `GasDynamics` instead of the fixed `refill_rate`, split on windows: the plasma's window-averaged
+  ionization is the gas model's argon sink, the ions reaching the target return as argon from the
+  target wall, the ion friction on the gas is optional, and the gas sets the plasma's `N`.
+  `examples/spoke_gas_coupled.py` compares it with the relaxation closure on Boeuf's 1D state.
 - `DriftFluid2D(metal=...)`: the sputtered metal in the 2D drift fluid, opt-in (a
   `TargetMaterial` of `wellbalanced.magnetron`). The ions that hit the cathode sputter
   `argon_yield` atoms per `Ar+` and `self_yield` per `M+` (self-sputtering); the atoms leave as a
