@@ -65,7 +65,8 @@ shows how they fit together.
 
 8. **[Drift fluid 2D](/wellbalanced/numerics/driftfluid2d/):** the axial-azimuthal plane with
    Hall-tensor electrons, inertial ions, the gas and full Poisson, stepped by SSP-RK3 with an
-   implicit permittivity; its linear modes and the
+   implicit permittivity, optionally with the sputtered metal (atoms and singly charged
+   ions, self-sputtering and a secondary yield per ion species); its linear modes and the
    **[local dispersion relations](/wellbalanced/numerics/dispersion/)** (cold or kinetic ions)
    and the **[nonlocal eigenmodes](/wellbalanced/numerics/dispersion-eigenmodes/)** across a 1D
    profile (drift-fluid, inertial or gyro-averaged electrons) describe the gradient-drift
@@ -94,8 +95,9 @@ along $\mathbf E\times\mathbf B$; gradient lengths $L = f/f'$ are signed.
 - The inductive field: no displacement current, no in-plane drift force in the momentum
   balance, no viscous time stepper; the 0D driver has no stochastic heating, shields or
   mutual coupling.
-- `DriftFluid2D`: no electron inertia, no electron-ion or ion-ion collisions, no metal, no
-  race-track curvature, no gas temperature. `Magnetron`: no metastables, no multiply charged
+- `DriftFluid2D`: no electron inertia, no electron-ion or ion-ion collisions, no
+  race-track curvature, no gas temperature; of the metal, no doubly charged ions, no
+  electron collisions with the atoms but their ionization, and the atoms a beam along $x$. `Magnetron`: no metastables, no multiply charged
   ions, no gas heating.
 - `GasDynamics` and `NeutralFluid2D` are continuum models at Knudsen numbers of 0.1 to 1,
   without a kinetic check.

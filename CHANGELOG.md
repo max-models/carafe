@@ -13,6 +13,17 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `DriftFluid2D(metal=...)`: the sputtered metal in the 2D drift fluid, opt-in (a
+  `TargetMaterial` of `wellbalanced.magnetron`). The ions that hit the cathode sputter
+  `argon_yield` atoms per `Ar+` and `self_yield` per `M+` (self-sputtering); the atoms leave as a
+  beam along `x` at `metal_speed`, are ionized by electron impact (the Lotz rate by default, its
+  energy an electron energy loss) and by charge exchange with `Ar+`, and their singly charged
+  ions are a second ion fluid with its own mass, in Poisson's equation and the current. The
+  cathode emits `argon_secondary` electrons per `Ar+` and `self_secondary` per `M+`, so the
+  secondary emission depends on the ion species. `DriftFluid2D.cathode_budget` gives the ion
+  fluxes into the cathode, the emitted electrons, the sputtered flux and the self-sputtering
+  share. Without a metal the results are unchanged bit for bit. The yields, `metal_speed` and the
+  metal ion friction are placeholders.
 - A live demo in the docs (Getting started, "Live demo"): Boeuf's gradient-drift dispersion
   relation (`boeuf_dispersion_roots`) solved in the browser with Pyodide, growth rate and phase
   speed against `k_y` with sliders for `B`, `E_0`, `T_e`, `n_0`, `L_n`, `L_B`, `nu` and the grad-B
