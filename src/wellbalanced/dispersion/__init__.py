@@ -55,6 +55,7 @@ predictions this serves are in the spokes3d transport theory notes
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any, cast
 
 import numpy as np
 import xarray as xr
@@ -346,13 +347,13 @@ class LocalDispersion:
 
     def _electron_velocity(
         self,
-        omega: complex | np.ndarray,
+        omega: Any,
         kx: float,
         ky: float,
-        a: complex | np.ndarray,
+        a: Any,
         b_field: float,
         e_field: float,
-    ) -> tuple[complex | np.ndarray, complex | np.ndarray]:
+    ) -> tuple[Any, Any]:
         """``(delta v_x, delta v_y)`` of the electrons from the perpendicular momentum balance.
 
         ``e delta phi / T_e = 1`` and ``delta n / n_0 = a``; ``b_field`` and ``e_field`` are
@@ -488,7 +489,8 @@ class LocalDispersion:
         scale = abs(ky * self.plasma.exb_velocity) + 1.0
 
         def residual(w: np.ndarray) -> np.ndarray:
-            return self.residual(w, kx, ky)
+            # residual and electron_response take arrays of omega as well as one value
+            return np.asarray(self.residual(cast(Any, w), kx, ky))
 
         def minima(w: np.ndarray, periodic_axis: int | None) -> list[complex]:
             """Local minima of ``|residual|`` on the grid ``w`` (no wrap-around at the edges)."""
