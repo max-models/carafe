@@ -54,7 +54,6 @@ predictions this serves are in the spokes3d transport theory notes
 
 from __future__ import annotations
 
-import copy
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -347,48 +346,44 @@ class LocalDispersion:
 
     def _electron_velocity(
         self,
-        omega: complex,
+        omega: complex | np.ndarray,
         kx: float,
         ky: float,
-        a: complex,
+        a: complex | np.ndarray,
         b_field: float,
         e_field: float,
-    ) -> tuple[complex, complex]:
+    ) -> tuple[complex | np.ndarray, complex | np.ndarray]:
         """``(delta v_x, delta v_y)`` of the electrons from the perpendicular momentum balance.
 
         ``e delta phi / T_e = 1`` and ``delta n / n_0 = a``; ``b_field`` and ``e_field`` are
         passed explicitly so the compressibility can be taken by differentiating in them.
         Electron inertia with the equilibrium-flow advection and shear, the Lorentz force,
-        the isothermal pressure and collisions: a 2 x 2 complex solve.
+        the isothermal pressure and collisions: a 2 x 2 complex system, solved in closed
+        form so that ``omega`` and ``a`` may be arrays.
         """
         p = self.plasma
         te = p.electron_temperature * E
-        # a copy of the converted plasma: a new Plasma would convert its units again,
-        # which costs more than this solve
-        plasma = copy.copy(p)
-        for name, value in (
-            ("e_field", e_field),
-            ("b_field", b_field),
-            ("ionization_frequency", 0.0),
-            ("curl_free_field", False),
-        ):
-            object.__setattr__(plasma, name, value)
-        v0x, v0y = plasma.electron_flow
-        shear = plasma.flow_shear
+        # the equilibrium flow of Plasma.electron_flow and Plasma.flow_shear at these fields
         omega_ce = E * b_field / ELECTRON_MASS
         nu = p.electron_collision_frequency
+        v0y = -(e_field + p.electron_temperature / p.density_length) / b_field
+        v0x = (nu / omega_ce) * v0y
+        shear = -v0y / p.field_length + (e_field / b_field) / p.e_field_length
         wt = omega - kx * v0x - ky * v0y
         # the pressure force per particle, -grad p / n, linearised with dn = n_0(x) a: the
         # n_0' a of grad(dn) cancels the grad(p_0) dn / n_0^2 term, leaving -i k T a
         # m (-i wt) dv_x = i e k_x dphi - e B dv_y - i k_x T a - m nu dv_x
         # m (-i wt) dv_y + m shear dv_x = i e k_y dphi + e B dv_x - i k_y T a - m nu dv_y
+        # [[diag, omega_ce], [shear - omega_ce, diag]] (dv_x, dv_y) = (force_x, force_y)
         diag = -1j * wt + nu
-        matrix = np.array([[diag, omega_ce], [-omega_ce + shear, diag]], dtype=complex)
-        force_x = 1j * kx * te * (1.0 - a)
-        force_y = 1j * ky * te * (1.0 - a)
-        rhs = np.array([force_x, force_y], dtype=complex) / ELECTRON_MASS
-        vx, vy = np.linalg.solve(matrix, rhs)
-        return complex(vx), complex(vy)
+        force_x = 1j * kx * te * (1.0 - a) / ELECTRON_MASS
+        force_y = 1j * ky * te * (1.0 - a) / ELECTRON_MASS
+        det = diag * diag - omega_ce * (shear - omega_ce)
+        vx = (diag * force_x - omega_ce * force_y) / det
+        vy = (diag * force_y - (shear - omega_ce) * force_x) / det
+        if np.ndim(vx) == 0:
+            return complex(vx), complex(vy)
+        return vx, vy
 
     def electron_response(
         self, omega: complex, kx: float, ky: float
@@ -491,7 +486,9 @@ class LocalDispersion:
         ordering degrades as the ratio grows; at Boeuf's point it is already 0.45.
         """
         scale = abs(ky * self.plasma.exb_velocity) + 1.0
-        residual = np.vectorize(lambda o: self.residual(o, kx, ky))
+
+        def residual(w: np.ndarray) -> np.ndarray:
+            return self.residual(w, kx, ky)
 
         def minima(w: np.ndarray, periodic_axis: int | None) -> list[complex]:
             """Local minima of ``|residual|`` on the grid ``w`` (no wrap-around at the edges)."""

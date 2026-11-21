@@ -1,6 +1,6 @@
 ---
 title: Live demo
-description: The gradient-drift dispersion relation of a magnetron, solved in your browser.
+description: The gradient-drift dispersion relation of a magnetron, by three models, solved in your browser.
 ---
 
 import PyodideDemo from '@max-models/starlight-theme/components/PyodideDemo.astro';
@@ -20,11 +20,12 @@ the dispersion relation again.
 		{ name: 'density_length', label: 'Density gradient length <i>L</i><sub>n</sub>', min: -10, max: -0.5, step: 0.1, value: -2.2, unit: 'mm' },
 		{ name: 'field_length', label: 'Field gradient length <i>L</i><sub>B</sub>', min: -30, max: -2, step: 0.5, value: -6, unit: 'mm' },
 		{ name: 'collision_frequency', label: 'Collision frequency <i>ν</i>', min: 5, max: 8, value: 2e7, log: true, unit: 's<sup>-1</sup>' },
-		{ name: 'grad_b', label: 'Grad-B drift', options: ['on', 'off'], value: 'on' },
+		{ name: 'model', label: 'Model', options: ['Boeuf', '2D field', '3D field', 'all three'], value: 'Boeuf' },
+		{ name: 'grad_b', label: 'Grad-B drift (Boeuf)', options: ['on', 'off'], value: 'on' },
 	]}
 	captions={[
-		'Growth rate of the fastest root against the azimuthal wavenumber; the dot marks the fastest mode.',
-		'Phase speed along E×B of the fastest root, where it grows.',
+		'Growth rate of the gradient-drift mode against the azimuthal wavenumber; the dots mark the fastest modes.',
+		'Phase speed along E×B of the mode, where it grows.',
 	]}
 	aspect={2}
 />
@@ -38,6 +39,23 @@ wavelength of 1.6 cm and moves at about 15 km/s, far slower than the E×B drift.
 drives the mode and the grad-B drift of the falling field works against it: with the grad-B drift
 on, it grows fast only while |<i>L</i><sub>n</sub>| is below about |<i>L</i><sub>B</sub>|/2. Try
 <i>L</i><sub>B</sub> = −3 mm or <i>L</i><sub>n</sub> = −5 mm.
+
+The model selector compares three local relations at the same parameters:
+
+- Boeuf: Boeuf's relation above, cold fluid ions, the fastest root.
+- 2D field: the local theory of `wellbalanced.dispersion` (`LocalDispersion` with `KineticIons` and
+  Poisson's equation), in the 2D model field <i>B</i>(<i>x</i>) **z** of the planar simulations:
+  room-temperature Maxwellian ions with Landau damping, electron inertia and collisions kept
+  exactly, the compressibility of every drift taken from the field gradient. Its drift fluid counts
+  the grad-B frequency once where Boeuf's relation counts it twice.
+- 3D field: the same in a curl-free (vacuum) field, as the arched field of a real magnetron is: the
+  E×B and diamagnetic drifts are twice as compressible as in the 2D model field. This is the part
+  of the physics that a planar 2D simulation leaves out and a 3D one keeps.
+- all three: the three together.
+
+At Boeuf's point the local theory grows about half as fast as his relation, in a narrow band of
+wavelengths (the wavenumber axis is logarithmic), and the 3D field moves that band to longer
+wavelengths. The local theory scans 100 wavenumbers and takes about two seconds per model in the browser.
 
 The same scan as a script:
 
