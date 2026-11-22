@@ -7,6 +7,13 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- `LocalDispersion` solves the electrons' 2 x 2 momentum balance in closed form and evaluates
+  the residual on whole arrays of frequencies: the root search is about 100 times faster
+  (a 30-wavenumber scan from 18 s to 0.15 s), with the same roots.
+- The live demo compares three local relations of the gradient-drift mode: Boeuf's cold-ion
+  relation and the local theory with kinetic ions in the 2D model field and in a curl-free (3D)
+  field, on a logarithmic wavenumber axis.
+
 - The neutralizer docs say which kind of neutralizer a channel is: without cusps the gas
   neutralizer of ITER's injectors, with cusps the beam-driven plasma neutralizer studied for
   DEMO (`illustrative_deuterium_neutralizer` has cusps).
