@@ -1,6 +1,6 @@
-r"""Ideal MHD in two dimensions on a patchwork hierarchy.
+r"""MHD in two dimensions on a patchwork hierarchy.
 
-`MHD2D` solves the equations of ideal magnetohydrodynamics in a plane ``(x, y)``
+`MHD2D` solves the equations of magnetohydrodynamics in a plane ``(x, y)``
 with all three components of the velocity and the magnetic field (2.5D), in
 Heaviside–Lorentz units with :math:`\mu_0 = 1` (the field in units of
 :math:`\sqrt{\mu_0}`):
@@ -12,11 +12,32 @@ Heaviside–Lorentz units with :math:`\mu_0 = 1` (the field in units of
         + p_T - \mathbf B\mathbf B\big) = 0,
 
     \partial_t E + \nabla\cdot\big((E + p_T)\mathbf u
-        - (\mathbf u\cdot\mathbf B)\mathbf B\big) = 0, \qquad
-    \partial_t\mathbf B = \nabla\times(\mathbf u\times\mathbf B),
+        - (\mathbf u\cdot\mathbf B)\mathbf B + \eta\,\mathbf J\times\mathbf B
+        + \mathbf q\big) = \rho\,\mathbf u\cdot\mathbf g, \qquad
+    \partial_t\mathbf B = \nabla\times(\mathbf u\times\mathbf B - \eta\mathbf J),
 
-with :math:`p_T = p + |\mathbf B|^2/2` and
-:math:`E = p/(\gamma - 1) + \rho|\mathbf u|^2/2 + |\mathbf B|^2/2`.
+with :math:`p_T = p + |\mathbf B|^2/2`,
+:math:`E = p/(\gamma - 1) + \rho|\mathbf u|^2/2 + |\mathbf B|^2/2`,
+:math:`\mathbf J = \nabla\times\mathbf B` and the gravity source
+:math:`\rho\mathbf g` in the momentum equation. The optional terms:
+
+- *resistivity* :math:`\eta` (a uniform magnetic diffusivity): the Ohmic electric
+  field :math:`\eta\mathbf J`, which heats the gas while the total energy is
+  conserved;
+- *Braginskii (anisotropic) heat conduction*: :math:`\mathbf q =
+  -\kappa_\parallel\,\mathbf b(\mathbf b\cdot\nabla T) - \kappa_\perp\nabla T` with
+  :math:`\mathbf b = \mathbf B/|\mathbf B|` and :math:`T = p/\rho`, uniform
+  conductivities; the gradient across a face in the parallel term is the
+  monotonized-central average of its four neighbours (Sharma and Hammett 2007),
+  which keeps the temperature from overshooting where the field is oblique to the
+  grid;
+- *gravity*: a uniform acceleration :math:`\mathbf g`.
+
+The diffusive terms are explicit; the time step is the smaller of the CFL step
+and half the stability limit of explicit diffusion.
+The gravity source is not well balanced: a hydrostatic atmosphere keeps spurious
+velocities that fall at first order with the cell size (about 6e-4 at a density jump
+of two, 32 cells across the Rayleigh–Taylor box, `rayleigh_taylor`).
 
 **The mesh is patchwork's.** The model owns no grid: it allocates its fields on
 an `patchwork.AMRHierarchy` and uses the hierarchy's halo exchange, flux register
@@ -52,15 +73,19 @@ method (SSP-RK2), and refluxing (`patchwork.FluxRegister`) at coarse–fine face
 Where a reconstructed density or pressure is not positive the face falls back to
 first order.
 
-**Boundaries.** Periodic axes are those the hierarchy declares periodic; the faces
-of the other axes are outflow (zero-gradient) boundaries.
+**Boundaries.** Periodic axes are those the hierarchy declares periodic. The faces
+of each other axis are outflow (zero-gradient) boundaries or perfectly conducting,
+reflecting walls (``boundaries={"y": "wall"}``): the halo mirrors the cells with the
+normal velocity reversed, :math:`A_z` is odd about its wall value so the normal field
+stays zero, the electric field along the wall is zero, and nothing but the pressure
+crosses it.
 
 patchwork is an optional dependency of carafe (the ``spatial`` extra): install it to
 use this module.
 
-**Not yet.** Resistivity, anisotropic conduction, gravity, walls, the r–z metric
-and graded axes; MPI is parallel over patches (the fields of a patch are not split
-between ranks).
+**Not yet.** Slab and cylinder geometry only in the sense of a Cartesian plane: no
+r–z metric, no graded axes, no toroidal geometry. MPI is parallel over patches (the
+fields of a patch are not split between ranks).
 """
 
 from __future__ import annotations
@@ -86,6 +111,10 @@ __all__ = ["MHD2D", "hlld_flux"]
 HALO = 2
 #: The cell-centered conserved fields, in this order.
 CONSERVED = ("density", "momentum_x", "momentum_y", "momentum_z", "energy", "bz")
+#: The boundary kinds of a non-periodic axis.
+BOUNDARIES = ("outflow", "wall")
+#: Share of the explicit-diffusion stability limit the time step may take.
+DIFFUSION_SAFETY = 0.5
 #: Relative size below which the HLLD star-state denominator counts as zero.
 _DEGENERATE = 1.0e-12
 
@@ -322,6 +351,60 @@ def _outflow_nodes(array: np.ndarray, axis: int, lower: bool, upper: bool) -> No
             moved[-h - 1 + k] = edge + k * (edge - inner)
 
 
+def _wall_cells(
+    array: np.ndarray, axis: int, lower: bool, upper: bool, sign: float = 1.0
+) -> None:
+    """Mirrored halo cells at walls along ``axis``; ``sign`` -1 for the normal momentum."""
+    h = HALO
+    moved = np.moveaxis(array, axis, 0)
+    if lower:
+        for k in range(h):
+            moved[h - 1 - k] = sign * moved[h + k]
+    if upper:
+        n = moved.shape[0]
+        for k in range(h):
+            moved[n - h + k] = sign * moved[n - h - 1 - k]
+
+
+def _wall_nodes(array: np.ndarray, axis: int, lower: bool, upper: bool) -> None:
+    """Halo nodes of ``A_z`` odd about the wall nodes: zero normal field, even tangential."""
+    h = HALO
+    moved = np.moveaxis(array, axis, 0)
+    if lower:
+        wall = moved[h].copy()
+        for k in range(1, h + 1):
+            moved[h - k] = 2.0 * wall - moved[h + k]
+    if upper:
+        n = moved.shape[0]
+        wall = moved[n - h - 1].copy()
+        for k in range(1, h + 1):
+            moved[n - h - 1 + k] = 2.0 * wall - moved[n - h - 1 - k]
+
+
+def _transverse_gradient(t: np.ndarray, axis: int, spacing: float) -> np.ndarray:
+    """Limited gradient across the faces normal to ``axis`` (Sharma and Hammett 2007).
+
+    For the faces between cells ``k - 1`` and ``k`` along ``axis`` (``k = 2 .. n -
+    2``, as `MHD2D._reconstruct`), the derivative along the other axis: the
+    monotonized-central limiter of the four one-sided differences of the two cells.
+    Zero in the first and last row across, which no block face uses.
+    """
+    mc = LIMITERS["mc"]
+    other = 1 - axis
+    moved = np.moveaxis(t, other, 0)  # the transverse axis first
+    forward = np.zeros_like(moved)
+    backward = np.zeros_like(moved)
+    forward[1:-1] = (moved[2:] - moved[1:-1]) / spacing
+    backward[1:-1] = (moved[1:-1] - moved[:-2]) / spacing
+    per_cell = np.moveaxis(mc(forward, backward), 0, other)
+    index_low = [slice(None)] * 2
+    index_high = [slice(None)] * 2
+    n = t.shape[axis]
+    index_low[axis] = slice(1, n - 2)
+    index_high[axis] = slice(2, n - 1)
+    return mc(per_cell[tuple(index_low)], per_cell[tuple(index_high)])
+
+
 # The model -----------------------------------------------------------------------#
 @method(
     equations={
@@ -330,34 +413,47 @@ def _outflow_nodes(array: np.ndarray, axis: int, lower: bool, upper: bool) -> No
         "energy": r"\partial_t E + \nabla\cdot\big((E + p_T)\mathbf u - (\mathbf u\cdot\mathbf B)\mathbf B\big) = 0, \qquad E = \frac{p}{\gamma - 1} + \tfrac12\rho|\mathbf u|^2 + \tfrac12|\mathbf B|^2",
         "field": r"B_x = B_{0x} + \partial_y A_z, \quad B_y = B_{0y} - \partial_x A_z, \quad \partial_t A_z = -E_z = u_x B_y - u_y B_x, \quad \partial_t B_z + \nabla\cdot(B_z\mathbf u - u_z\mathbf B) = 0",
         "ct_contact": r"E_z = \tfrac14\big(\textstyle\sum_\text{faces} E_z^f\big) + \tfrac14\big(\textstyle\sum_\text{4 half-faces} (E_z^f - E_z^c)_\text{upwind}\big)",
+        "resistivity": r"\mathbf E \mathrel{+}= \eta\mathbf J, \quad \mathbf J = \nabla\times\mathbf B, \quad J_z = \partial_x B_y - \partial_y B_x \text{ at the nodes}, \quad \text{energy flux} \mathrel{+}= \eta\,\mathbf J\times\mathbf B",
+        "conduction": r"\mathbf q = -\kappa_\parallel\mathbf b(\mathbf b\cdot\nabla T) - \kappa_\perp\nabla T, \quad T = p/\rho, \quad \partial_y T|_{x\text{-face}} = \mathrm{MC}\big(\mathrm{MC}(\delta^+_{i-1}, \delta^-_{i-1}), \mathrm{MC}(\delta^+_i, \delta^-_i)\big)",
+        "gravity": r"\partial_t(\rho\mathbf u) \mathrel{+}= \rho\mathbf g, \qquad \partial_t E \mathrel{+}= \rho\mathbf u\cdot\mathbf g",
+        "walls": r"\text{mirrored halo}, \ u_n \to -u_n, \quad A_z(w - k) = 2A_z(w) - A_z(w + k), \quad E_z|_w = 0",
     },
     order=2,
     assumptions=(
         r"ideal MHD in the plane with three velocity and field components; Heaviside–Lorentz units ($\mu_0 = 1$)",
         r"in-plane field from a nodal $A_z$: zero discrete divergence per cell and on the composite mesh, to round-off",
         r"MUSCL on the primitives, HLLD, CT-contact electric field, Heun (SSP-RK2) at CFL 0.4; refluxing at coarse–fine faces",
-        r"Cartesian, uniform levels, one time step for all levels; periodic or outflow faces",
+        r"Cartesian, uniform levels, one time step for all levels; periodic, outflow or conducting-wall faces",
+        r"uniform $\eta$, $\kappa_\parallel$, $\kappa_\perp$ and $\mathbf g$; diffusion explicit at half its stability limit; Sharma–Hammett limited transverse gradients",
         r"the order is that of a smooth Alfvén wave with the unlimited reconstruction",
     ),
     references=(
         "[Gardiner and Stone, J. Comput. Phys. 205, 509 (2005)](https://doi.org/10.1016/j.jcp.2004.11.016)",
         "[Tóth, J. Comput. Phys. 161, 605 (2000)](https://doi.org/10.1006/jcph.2000.6519)",
+        "[Sharma and Hammett, J. Comput. Phys. 227, 123 (2007)](https://doi.org/10.1016/j.jcp.2007.07.026)",
     ),
     components=(hlld_flux,),
     problem=_alfven_problem,
 )
 class MHD2D:
-    """Ideal MHD (2.5D) on the patches of a patchwork hierarchy; see the module docstring.
+    """MHD (2.5D) on the patches of a patchwork hierarchy; see the module docstring.
 
     Args:
         hierarchy: The 2D Cartesian hierarchy the fields live on. Its periodic axes
-            are periodic; the faces of the others are outflow boundaries.
+            are periodic; the faces of the others follow ``boundaries``.
         gamma: The adiabatic index.
         mean_field: The uniform in-plane field ``(B0x, B0y)`` added to the curl of
             ``A_z``.
         limiter: The slope limiter of the reconstruction (`carafe.limiters`):
             ``"minmod"``, ``"vanleer"`` (default), ``"mc"`` or ``"none"``.
         cfl: The Courant number.
+        resistivity: The magnetic diffusivity ``eta`` (0: ideal MHD).
+        conduction: The heat conductivities ``(kappa_parallel, kappa_perp)`` along
+            and across the field, in units of energy flux per gradient of ``T = p /
+            rho``.
+        gravity: The uniform acceleration ``(g_x, g_y)``.
+        boundaries: The kind of the faces of each non-periodic axis, ``{"x": ...,
+            "y": ...}``: ``"outflow"`` (the default) or ``"wall"``.
         prefix: The prefix of the names of the fields the model allocates on the
             hierarchy (``prefix + "density"``, ..., ``prefix + "az"``).
     """
@@ -370,6 +466,10 @@ class MHD2D:
         mean_field: tuple[float, float] = (0.0, 0.0),
         limiter: str = "vanleer",
         cfl: float = 0.4,
+        resistivity: float = 0.0,
+        conduction: tuple[float, float] = (0.0, 0.0),
+        gravity: tuple[float, float] = (0.0, 0.0),
+        boundaries: dict[str, str] | None = None,
         prefix: str = "mhd_",
     ) -> None:
         """Allocate the fields on ``hierarchy``; set the state with `set_state`."""
@@ -385,11 +485,35 @@ class MHD2D:
             raise ValueError("cfl must be in (0, 1]")
         if gamma <= 1.0:
             raise ValueError("gamma must be larger than 1")
+        if resistivity < 0.0 or min(conduction) < 0.0:
+            raise ValueError("the resistivity and the conductivities must be >= 0")
+        kinds = {"x": "outflow", "y": "outflow"}
+        for axis_name, kind in (boundaries or {}).items():
+            if axis_name not in kinds or kind not in BOUNDARIES:
+                raise ValueError(
+                    f"boundaries maps 'x' or 'y' to one of {BOUNDARIES}, "
+                    f"got {axis_name!r}: {kind!r}"
+                )
+            axis = "xy".index(axis_name)
+            if hierarchy.periodic[axis]:
+                raise ValueError(f"the hierarchy is periodic along {axis_name}")
+            if kind == "wall" and mean_field[axis] != 0.0:
+                raise ValueError(
+                    f"a wall normal to {axis_name} needs a zero mean field along it"
+                )
+            kinds[axis_name] = kind
         self.hierarchy = hierarchy
         self.gamma = float(gamma)
         self.mean_field = (float(mean_field[0]), float(mean_field[1]))
         self.limiter = limiter
         self.cfl = float(cfl)
+        self.resistivity = float(resistivity)
+        self.conduction = (float(conduction[0]), float(conduction[1]))
+        self.gravity = (float(gravity[0]), float(gravity[1]))
+        self.walls = tuple(
+            kinds[name] == "wall" and not hierarchy.periodic[axis]
+            for axis, name in enumerate("xy")
+        )
         self.names = {name: prefix + name for name in CONSERVED}
         self.potential = prefix + "az"
         for name in CONSERVED:
@@ -485,6 +609,51 @@ class MHD2D:
         )
         return model
 
+    @classmethod
+    def rayleigh_taylor(
+        cls,
+        cells: int,
+        *,
+        field: float = 0.0,
+        amplitude: float = 0.01,
+        **options: Any,
+    ) -> MHD2D:
+        """The single-mode Rayleigh–Taylor instability, ``cells x 3 cells`` cells.
+
+        Heavy gas (density 2) on light (density 1) over ``[-0.25, 0.25] x [-0.75,
+        0.75]``, periodic in ``x``, walls in ``y``, gravity ``-0.1`` along ``y``,
+        hydrostatic pressure ``2.5 - 0.1 rho y``, ``gamma = 1.4``, a velocity
+        perturbation ``v_y = amplitude (1 + cos 4 pi x)(1 + cos 3 pi y) / 4`` and a
+        uniform field ``field`` along ``x`` (the setup of Stone and Gardiner, *ApJS*
+        178, 137, 2008). A field along the interface stabilises the modes with
+        ``k B^2 > (rho_h - rho_l) g`` roughly.
+        """
+        from patchwork import AMRHierarchy
+
+        hierarchy = AMRHierarchy(
+            (cells, 3 * cells),
+            ((-0.25, 0.25), (-0.75, 0.75)),
+            periodic=(True, False),
+        )
+        options = {"gamma": 1.4, **options}
+        model = cls(
+            hierarchy,
+            mean_field=(field, 0.0),
+            gravity=(0.0, -0.1),
+            boundaries={"y": "wall"},
+            **options,
+        )
+
+        def density(x, y):
+            return np.where(y > 0.0, 2.0, 1.0)
+
+        def velocity(x, y):
+            vy = amplitude * (1 + np.cos(4 * np.pi * x)) * (1 + np.cos(3 * np.pi * y))
+            return (0.0 * x, vy / 4.0, 0.0 * x)
+
+        model.set_state(density, velocity, lambda x, y: 2.5 - 0.1 * density(x, y) * y)
+        return model
+
     # State ------------------------------------------------------------------#
     @staticmethod
     def _evaluate(value: Value, x: np.ndarray, y: np.ndarray) -> np.ndarray:
@@ -563,7 +732,7 @@ class MHD2D:
 
     # Halos and boundaries ---------------------------------------------------#
     def _fill_halos(self) -> None:
-        """Halos from the hierarchy, then the outflow faces of the domain."""
+        """Halos from the hierarchy, then the outflow faces and walls of the domain."""
         hierarchy = self.hierarchy
         for name in self.names.values():
             hierarchy.exchange_halos(name)
@@ -577,13 +746,24 @@ class MHD2D:
                 upper = patch.box[axis][1] == shape[axis]
                 if not (lower or upper):
                     continue
-                for name in self.names.values():
-                    _outflow_cells(
-                        patch.field(name).local_with_halos, axis, lower, upper
+                potential = patch.field(self.potential).local_with_halos
+                if not self.walls[axis]:
+                    for name in self.names.values():
+                        _outflow_cells(
+                            patch.field(name).local_with_halos, axis, lower, upper
+                        )
+                    _outflow_nodes(potential, axis, lower, upper)
+                    continue
+                normal = ("momentum_x", "momentum_y")[axis]
+                for key, name in self.names.items():
+                    _wall_cells(
+                        patch.field(name).local_with_halos,
+                        axis,
+                        lower,
+                        upper,
+                        -1.0 if key == normal else 1.0,
                     )
-                _outflow_nodes(
-                    patch.field(self.potential).local_with_halos, axis, lower, upper
-                )
+                _wall_nodes(potential, axis, lower, upper)
 
     # Primitive variables -----------------------------------------------------#
     def _primitive(self, patch: Patch) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -643,6 +823,71 @@ class MHD2D:
             right = np.where(bad, cut(2, n - 1), right)
         return left, right
 
+    def _wall_sides(self, patch: Patch) -> tuple[tuple[bool, bool], ...]:
+        """Whether the lower and upper faces of the patch along each axis are walls."""
+        shape = self.hierarchy.level_shape(patch.level)
+        return tuple(
+            (
+                self.walls[axis] and patch.box[axis][0] == 0,
+                self.walls[axis] and patch.box[axis][1] == shape[axis],
+            )
+            for axis in range(2)
+        )
+
+    def _resistive(self, prim, bxf, byf, fx, fy, dx, dy) -> np.ndarray:
+        """Add the Ohmic fluxes of ``B_z`` and the energy to ``fx`` and ``fy``.
+
+        Returns ``eta J_z`` at the nodes of the haloed block (zero on its outer
+        ring), the Ohmic part of the electric field that advances ``A_z``.
+        """
+        eta = self.resistivity
+        bx, by, bz = prim[5], prim[6], prim[7]
+        jz = np.zeros((bxf.shape[0], byf.shape[1]))
+        # node (i, j): y-faces (i - 1, j), (i, j) and x-faces (i, j - 1), (i, j)
+        jz[1:-1, 1:-1] = (byf[1:, 1:-1] - byf[:-1, 1:-1]) / dx - (
+            bxf[1:-1, 1:] - bxf[1:-1, :-1]
+        ) / dy
+        # x-faces 2 .. X - 2 between cells k - 1 and k, all rows
+        jy = -(bz[2:-1] - bz[1:-2]) / dx
+        jz_x = 0.5 * (jz[2:-2, :-1] + jz[2:-2, 1:])
+        by_x = 0.5 * (by[1:-2] + by[2:-1])
+        bz_x = 0.5 * (bz[1:-2] + bz[2:-1])
+        fx[6] += eta * jy  # -eta dB_z/dx
+        fx[4] += eta * (jy * bz_x - jz_x * by_x)
+        # y-faces 2 .. Y - 2, all columns
+        jx = (bz[:, 2:-1] - bz[:, 1:-2]) / dy
+        jz_y = 0.5 * (jz[:-1, 2:-2] + jz[1:, 2:-2])
+        bx_y = 0.5 * (bx[:, 1:-2] + bx[:, 2:-1])
+        bz_y = 0.5 * (bz[:, 1:-2] + bz[:, 2:-1])
+        fy[6] -= eta * jx  # -eta dB_z/dy
+        fy[4] += eta * (jz_y * bx_y - jx * bz_y)
+        return eta * jz
+
+    def _conductive(self, prim, bxf, byf, fx, fy, dx, dy) -> None:
+        """Add the Braginskii heat flux to the energy fluxes ``fx`` and ``fy``."""
+        parallel, perpendicular = self.conduction
+        t = prim[4] / prim[0]
+        bx, by, bz = prim[5], prim[6], prim[7]
+        tiny = np.finfo(float).tiny
+        # x-faces 2 .. X - 2
+        bn = bxf[2:-2, :]
+        bt = 0.5 * (by[1:-2] + by[2:-1])
+        bzf = 0.5 * (bz[1:-2] + bz[2:-1])
+        magnitude = np.sqrt(bn**2 + bt**2 + bzf**2)
+        b_n, b_t = bn / np.maximum(magnitude, tiny), bt / np.maximum(magnitude, tiny)
+        normal = (t[2:-1] - t[1:-2]) / dx
+        across = _transverse_gradient(t, 0, dy)
+        fx[4] -= parallel * b_n * (b_n * normal + b_t * across) + perpendicular * normal
+        # y-faces 2 .. Y - 2
+        bn = byf[:, 2:-2]
+        bt = 0.5 * (bx[:, 1:-2] + bx[:, 2:-1])
+        bzf = 0.5 * (bz[:, 1:-2] + bz[:, 2:-1])
+        magnitude = np.sqrt(bn**2 + bt**2 + bzf**2)
+        b_n, b_t = bn / np.maximum(magnitude, tiny), bt / np.maximum(magnitude, tiny)
+        normal = (t[:, 2:-1] - t[:, 1:-2]) / dy
+        across = _transverse_gradient(t, 1, dx)
+        fy[4] -= parallel * b_n * (b_n * normal + b_t * across) + perpendicular * normal
+
     def _patch_fluxes(self, patch: Patch) -> dict[str, Any]:
         """The face fluxes of a patch's cells and the electric field at its nodes."""
         prim, bxf, byf = self._primitive(patch)
@@ -674,6 +919,25 @@ class MHD2D:
         fx_by, gy_bx = fx[5], fy[5]  # x-flux of B_y = -E_z, y-flux of B_x = +E_z
         fx_rho, gy_rho = fx[0], fy[0]
         ez = _ct_contact(fx_by, gy_bx, fx_rho, gy_rho, ecc, nx, ny)
+        dx, dy = self.hierarchy.spacing(patch.level)
+        if self.resistivity > 0.0:
+            ez = (
+                ez
+                + self._resistive(prim, bxf, byf, fx, fy, dx, dy)[
+                    h : h + nx + 1, h : h + ny + 1
+                ]
+            )
+        if max(self.conduction) > 0.0:
+            self._conductive(prim, bxf, byf, fx, fy, dx, dy)
+        walls = self._wall_sides(patch)
+        if walls[0][0]:
+            ez[0, :] = 0.0
+        if walls[0][1]:
+            ez[-1, :] = 0.0
+        if walls[1][0]:
+            ez[:, 0] = 0.0
+        if walls[1][1]:
+            ez[:, -1] = 0.0
         sx = slice(h, h + ny)  # block rows (x-faces)
         sy = slice(h, h + nx)  # block columns (y-faces)
         xf = slice(0, nx + 1)  # block x-faces 0 .. nx: fx index k = face + h - 2
@@ -694,6 +958,22 @@ class MHD2D:
             "energy": fy[4, sy, yf],
             "bz": fy[6, sy, yf],
         }
+        # nothing but the pressure crosses a wall
+        for axis, flux in enumerate((flux_x, flux_y)):
+            for side, at in ((0, 0), (1, -1)):
+                if walls[axis][side]:
+                    for name in (
+                        "density",
+                        "energy",
+                        "bz",
+                        ("momentum_y", "momentum_x")[axis],
+                        "momentum_z",
+                    ):
+                        part = flux[name] = flux[name].copy()
+                        if axis == 0:
+                            part[at, :] = 0.0
+                        else:
+                            part[:, at] = 0.0
         return {"x": flux_x, "y": flux_y, "ez": ez}
 
     def _advance(self, dt: float, scale: float) -> None:
@@ -703,6 +983,14 @@ class MHD2D:
         fluxes = {
             id(patch): self._patch_fluxes(patch) for patch in hierarchy.local_patches
         }
+        gx, gy = self.gravity
+        sources = {}
+        if gx or gy:
+            for patch in hierarchy.local_patches:
+                rho = patch.field(self.names["density"]).local.copy()
+                mx = patch.field(self.names["momentum_x"]).local
+                my = patch.field(self.names["momentum_y"]).local
+                sources[id(patch)] = (rho * gx, rho * gy, (mx * gx + my * gy).copy())
         for name in CONSERVED:
             self.register.update(
                 self.names[name],
@@ -715,10 +1003,21 @@ class MHD2D:
             )
         for patch in hierarchy.local_patches:
             patch.field(self.potential).local[...] -= dt * fluxes[id(patch)]["ez"]
+            if gx or gy:
+                fx_, fy_, work = sources[id(patch)]
+                patch.field(self.names["momentum_x"]).local[...] += dt * fx_
+                patch.field(self.names["momentum_y"]).local[...] += dt * fy_
+                patch.field(self.names["energy"]).local[...] += dt * work
 
     # Time stepping -------------------------------------------------------------#
     def stable_step(self) -> float:
-        """The largest stable step: ``cfl`` times the fast-wave crossing time of a cell."""
+        """The largest stable step.
+
+        ``cfl`` times the fast-wave crossing time of a cell, and with resistivity
+        or conduction at most ``DIFFUSION_SAFETY`` of the stability limit of
+        explicit diffusion, ``1 / (2 D (1/dx^2 + 1/dy^2))`` with ``D`` the largest
+        of ``eta`` and ``(gamma - 1) kappa / rho``.
+        """
         self._check_ready()
         hierarchy = self.hierarchy
         smallest = np.inf
@@ -739,6 +1038,13 @@ class MHD2D:
             cy = _fast_speed(rho, p, by, bx, bz, self.gamma)
             rate = np.max((np.abs(u) + cx) / dx + (np.abs(v) + cy) / dy)
             smallest = min(smallest, 1.0 / rate)
+            diffusivity = max(
+                self.resistivity,
+                (self.gamma - 1.0) * max(self.conduction) / float(np.min(rho)),
+            )
+            if diffusivity > 0.0:
+                limit = 1.0 / (2.0 * diffusivity * (1.0 / dx**2 + 1.0 / dy**2))
+                smallest = min(smallest, DIFFUSION_SAFETY * limit / self.cfl)
         from maybempi import MPI
 
         return self.cfl * float(hierarchy.comm.allreduce(smallest, op=MPI.MIN))

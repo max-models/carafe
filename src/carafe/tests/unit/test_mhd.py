@@ -273,3 +273,133 @@ def test_interior_patch_of_a_bounded_domain():
     assert model.time > 0.0 and model.steps == 1
     assert model.composite_divergence() < 1e-14
     assert abs(model.totals()["density"] - before["density"]) < 0.01
+
+
+# Resistivity, conduction, gravity and walls ----------------------------------------#
+def _resistive_decay(cells, eta=0.01, t=0.5, a=1e-3):
+    hierarchy = AMRHierarchy((cells, cells), periodic=(True, True))
+    k = 2.0 * np.pi
+    model = MHD2D(hierarchy, resistivity=eta)
+    model.set_state(
+        1.0,
+        (0.0, 0.0, 0.0),
+        1.0,
+        vector_potential=lambda x, y: a / k * np.cos(k * x),
+        bz=lambda x, y: a * np.sin(k * y),
+    )
+    before = model.totals()["energy"]
+    model.run(t)
+    data = model.dataset()
+    amplitude = a * np.exp(-eta * k**2 * t)
+    x, y = data.x.values[:, None], data.y.values[None, :]
+    by = np.abs(data.magnetic_field_y.values - amplitude * np.sin(k * x)).max()
+    bz = np.abs(data.magnetic_field_z.values - amplitude * np.sin(k * y)).max()
+    return model, by / amplitude, bz / amplitude, model.totals()["energy"] - before
+
+
+def test_resistive_decay_converges_and_conserves_energy():
+    model, by16, bz16, change = _resistive_decay(16)
+    _, by32, bz32, _ = _resistive_decay(32)
+    assert by32 < 1e-3 and bz32 < 1e-3
+    assert np.log2(by16 / by32) > 1.9 and np.log2(bz16 / bz32) > 1.9
+    assert abs(change) < 1e-14  # the Ohmic heat stays in the total energy
+    assert model.divergence() < 1e-14
+
+
+def _hot_spot(field, conduction, cells=64, t=2e-3):
+    hierarchy = AMRHierarchy(
+        (cells, cells), ((-1.0, 1.0), (-1.0, 1.0)), periodic=(True, True)
+    )
+    model = MHD2D(hierarchy, mean_field=field, conduction=conduction, limiter="mc")
+    model.set_state(
+        1.0,
+        (0.0, 0.0, 0.0),
+        lambda x, y: 1.0 + 0.01 * np.exp(-(x**2 + y**2) / 0.02),
+    )
+    before = model.totals()["energy"]
+    model.run(t)
+    data = model.dataset()
+    return model, data, (data.pressure / data.density).values, before
+
+
+def test_conduction_along_an_aligned_field_is_one_dimensional_diffusion():
+    kappa, t = 10.0, 2e-3
+    model, data, temperature, before = _hot_spot((1.0, 0.0), (kappa, 0.0), t=t)
+    chi = (5.0 / 3.0 - 1.0) * kappa
+    s2 = 0.01 + 2.0 * chi * t
+    x, y = data.x.values[:, None], data.y.values[None, :]
+    exact = 1.0 + 0.01 * np.sqrt(0.01 / s2) * np.exp(-(x**2) / (2 * s2) - y**2 / 0.02)
+    assert np.abs(temperature - exact).max() < 2e-5
+    assert abs(model.totals()["energy"] - before) < 1e-13
+
+
+def test_oblique_conduction_stays_on_the_field_lines_without_overshoot():
+    field = (1.0 / np.sqrt(2.0), 1.0 / np.sqrt(2.0))
+    _, _, temperature, _ = _hot_spot(field, (10.0, 0.0))
+    assert temperature.min() > 1.0 - 1e-14  # the limited transverse gradient
+    np.testing.assert_allclose(temperature, temperature.T, atol=1e-15)
+    along, across = temperature[40, 40] - 1.0, temperature[40, 24] - 1.0
+    assert along > 100.0 * across
+
+
+def test_isotropic_conduction_without_a_field():
+    kappa, t = 10.0, 2e-3
+    _, data, temperature, _ = _hot_spot((0.0, 0.0), (0.0, kappa), t=t)
+    s2 = 0.01 + 2.0 * (2.0 / 3.0) * kappa * t
+    x, y = data.x.values[:, None], data.y.values[None, :]
+    exact = 1.0 + 0.01 * (0.01 / s2) * np.exp(-(x**2 + y**2) / (2 * s2))
+    assert np.abs(temperature - exact).max() < 3e-5
+
+
+def test_free_fall_gains_the_momentum_of_gravity():
+    model = MHD2D(AMRHierarchy((8, 8), periodic=(True, True)), gravity=(0.2, -0.5))
+    model.set_state(2.0, (0.0, 0.0, 0.0), 1.0)
+    model.run(0.3)
+    totals = model.totals()
+    assert totals["momentum_x"] == pytest.approx(2.0 * 0.2 * 0.3, rel=1e-12)
+    assert totals["momentum_y"] == pytest.approx(-2.0 * 0.5 * 0.3, rel=1e-12)
+
+
+def test_walls_conserve_mass_and_energy_and_keep_the_normal_field_zero():
+    hierarchy = AMRHierarchy((24, 24))
+    model = MHD2D(hierarchy, boundaries={"x": "wall", "y": "wall"})
+    model.set_state(
+        1.0,
+        (0.3, -0.2, 0.1),
+        lambda x, y: 1.0 + 2.0 * np.exp(-((x - 0.3) ** 2 + (y - 0.6) ** 2) / 0.005),
+        vector_potential=lambda x, y: 0.1 * np.sin(np.pi * x) * np.sin(np.pi * y),
+        bz=0.2,
+    )
+    before = model.totals()
+    model.run(0.3)
+    after = model.totals()
+    for name in ("density", "energy", "momentum_z", "bz"):
+        assert abs(after[name] - before[name]) < 1e-13
+    az = hierarchy.gather(hierarchy.patches[0], model.potential)
+    for edge in (az[0], az[-1], az[:, 0], az[:, -1]):
+        assert np.abs(edge).max() < 1e-15  # A_z constant along a wall: B_n = 0
+
+
+def test_rayleigh_taylor_grows_and_a_strong_field_holds_it():
+    free = MHD2D.rayleigh_taylor(16)
+    free.run(4.0)
+    held = MHD2D.rayleigh_taylor(16, field=0.3)
+    held.run(4.0)
+    growing = float(np.abs(free.dataset().velocity_y).max())
+    stable = float(np.abs(held.dataset().velocity_y).max())
+    assert growing > 0.015 and stable < 0.006  # from 0.01 at t = 0
+    assert free.divergence() < 1e-14
+
+
+def test_rejects_bad_boundaries_and_coefficients():
+    periodic = AMRHierarchy((4, 4), periodic=(True, False))
+    with pytest.raises(ValueError, match="periodic"):
+        MHD2D(periodic, boundaries={"x": "wall"})
+    with pytest.raises(ValueError, match="boundaries"):
+        MHD2D(AMRHierarchy((4, 4)), boundaries={"z": "wall"})
+    with pytest.raises(ValueError, match="boundaries"):
+        MHD2D(AMRHierarchy((4, 4)), boundaries={"y": "inflow"})
+    with pytest.raises(ValueError, match="mean field"):
+        MHD2D(AMRHierarchy((4, 4)), boundaries={"y": "wall"}, mean_field=(0.0, 1.0))
+    with pytest.raises(ValueError, match=">= 0"):
+        MHD2D(AMRHierarchy((4, 4)), resistivity=-1.0)
