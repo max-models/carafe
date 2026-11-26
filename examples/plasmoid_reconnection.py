@@ -25,7 +25,7 @@ import time
 import matplotlib.pyplot as plt
 import numpy as np
 from maybempi import MPI
-from patchwork import AMRHierarchy, plot_patches
+from patchwork import AMRHierarchy, CompositeCells, plot_patches
 
 from carafe.mhd import MHD2D, harris_sheets, sheet_diagnostics
 
@@ -113,8 +113,8 @@ def plot_current(model) -> None:
     x = x0 + (np.arange(round((x1 - x0) / finest[0])) + 0.5) * finest[0]
     y = y0 + (np.arange(round((y1 - y0) / finest[1])) + 0.5) * finest[1]
     xx, yy = np.meshgrid(x, y, indexing="ij")
-    cells = model._cells.locate(np.array([xx.ravel(), yy.ravel()]))
-    current = np.abs(leaf["jz"][cells]).reshape(xx.shape)
+    cells = CompositeCells(mesh).locate(np.array([xx.ravel(), yy.ravel()]))
+    current = np.abs(leaf["current_z"][cells]).reshape(xx.shape)
     fig, ax = plt.subplots(figsize=(7, 3.8))
     image = ax.pcolormesh(x, y, current.T, cmap="magma", shading="auto")
     plot_patches(mesh, show_grid=False, ax=ax)

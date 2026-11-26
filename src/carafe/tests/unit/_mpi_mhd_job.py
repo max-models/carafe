@@ -1,7 +1,7 @@
 """MHD2D on all ranks against the same run on one rank (run under ``mpirun``).
 
 Each rank builds the hierarchy twice: once over the world communicator (the patches
-spread by ``placement``, the first one split over all ranks) and once on its own
+spread by ``placement``, or each on all ranks with ``"all"``) and once on its own
 (``COMM_SELF``). Both take the same regrids and steps; the leaf values must agree to
 round-off and the integrals stay those of the start. Prints ``MPI_JOB_OK``.
 """
@@ -30,10 +30,10 @@ def run(comm, placement):
     model = MHD2D(mesh, resistivity=1e-3)
     k = 2 * np.pi
     model.set_state(
-        density=25 / (36 * np.pi),
-        velocity=(lambda x, y: -np.sin(k * y), lambda x, y: np.sin(k * x), 0.0),
-        pressure=5 / (12 * np.pi),
-        potential=lambda x, y: (
+        25 / (36 * np.pi),
+        (lambda x, y: -np.sin(k * y), lambda x, y: np.sin(k * x), 0.0),
+        5 / (12 * np.pi),
+        vector_potential=lambda x, y: (
             (np.cos(2 * k * x) / (2 * k) + np.cos(k * y) / k) / np.sqrt(4 * np.pi)
         ),
         bz=lambda x, y: 0.1 * np.cos(k * x),
@@ -47,7 +47,14 @@ def run(comm, placement):
     order = np.lexsort((leaf["y"], leaf["x"]))
     end = model.totals()
     drift = max(abs(end[name] - start[name]) for name in CONSERVED)
-    return np.stack([leaf[key][order] for key in ("rho", "bx", "by", "bz", "p")]), drift
+    keys = (
+        "density",
+        "magnetic_field_x",
+        "magnetic_field_y",
+        "magnetic_field_z",
+        "pressure",
+    )
+    return np.stack([leaf[key][order] for key in keys]), drift
 
 
 def main() -> None:

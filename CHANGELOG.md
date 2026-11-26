@@ -22,14 +22,12 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-- `MHD2D` (`carafe.mhd`): ideal and resistive MHD in a periodic plane on a patchwork
-  hierarchy, in units with mu_0 = 1. HLLD fluxes, MUSCL on the primitives, Heun's method
-  with refluxing (`patchwork.FluxRegister`), and the in-plane field as the curl of a vector
-  potential on the patch nodes with Gardiner and Stone's corner EMF, so div B = 0 holds to
-  round-off on the composite mesh and across regrids (`MHD2D.regrid`, tags from the current
-  density with `MHD2D.current_tags`). Explicit resistivity with Ohmic heating in the energy.
-  Second order on the circularly polarised Alfven wave, also across a refined patch; on any
-  number of ranks the results of one rank to round-off.
+- `MHD2D` (`carafe.mhd`): resistivity (`resistivity=`: `eta J` in the electric field, the
+  diffusion of `B_z`, `eta J x B` in the energy flux, the explicit diffusion limit in
+  `stable_step`), regridding on the current density (`current_tags`, `regrid`: the
+  integrals kept, `A_z` interpolated so div B stays zero on the composite mesh) and
+  `leaf_values` (the primitive variables and `J_z` on the leaf cells). Tests on refined and
+  regridded patches, resistive decay, and under mpirun the results of one rank.
 - `harris_sheets` and `sheet_diagnostics` (`carafe.mhd`): two Harris sheets in a periodic
   box (a seed mode and optional noise), the reconnected flux and the O- and X-points of a
   sheet. `examples/plasmoid_reconnection.py` runs them on regridded patches and on the
