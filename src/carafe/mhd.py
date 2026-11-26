@@ -1,852 +1,1078 @@
 r"""Ideal and resistive MHD in two dimensions on a patchwork hierarchy.
 
-`MHD2D` solves the compressible, single-fluid MHD equations in a periodic box of the
-plane, with all three components of the velocity and of the field, in units with
-$\mu_0 = 1$ (the field in units of $\sqrt{\mu_0}$, so the magnetic pressure is $B^2/2$):
+`MHD2D` solves the equations of ideal magnetohydrodynamics in a plane ``(x, y)``
+with all three components of the velocity and the magnetic field (2.5D), in
+Heaviside–Lorentz units with :math:`\mu_0 = 1` (the field in units of
+:math:`\sqrt{\mu_0}`):
 
-$$
-\partial_t\rho + \nabla\cdot(\rho\mathbf v) = 0, \qquad
-\partial_t(\rho\mathbf v) + \nabla\cdot\big(\rho\mathbf v\mathbf v
-    + (p + \tfrac12 B^2)\mathsf I - \mathbf B\mathbf B\big) = 0,
-$$
+.. math::
 
-$$
-\partial_t E + \nabla\cdot\big((E + p + \tfrac12 B^2)\mathbf v
-    - (\mathbf v\cdot\mathbf B)\mathbf B + \eta\,\mathbf J\times\mathbf B\big) = 0,
-\qquad
-\partial_t\mathbf B = -\nabla\times\mathbf E, \qquad
-\mathbf E = -\mathbf v\times\mathbf B + \eta\mathbf J, \qquad
-\mathbf J = \nabla\times\mathbf B,
-$$
+    \partial_t\rho + \nabla\cdot(\rho\mathbf u) = 0, \qquad
+    \partial_t(\rho\mathbf u) + \nabla\cdot\big(\rho\mathbf u\mathbf u
+        + p_T - \mathbf B\mathbf B\big) = 0,
 
-with $E = p/(\gamma - 1) + \tfrac12\rho v^2 + \tfrac12 B^2$ and a uniform resistivity
-$\eta$ (zero: ideal MHD). The Lundquist number of a layer of length $L$ is
-$S = L v_A / \eta$.
+    \partial_t E + \nabla\cdot\big((E + p_T)\mathbf u
+        - (\mathbf u\cdot\mathbf B)\mathbf B\big) = 0, \qquad
+    \partial_t\mathbf B = \nabla\times(\mathbf u\times\mathbf B),
 
-**The field.** The in-plane field is the curl of the vector potential $A_z$ plus a
-uniform field $\mathbf B_0$ (``mean_field``, which a periodic potential cannot carry),
+with :math:`p_T = p + |\mathbf B|^2/2` and
+:math:`E = p/(\gamma - 1) + \rho|\mathbf u|^2/2 + |\mathbf B|^2/2`. With a uniform
+resistivity :math:`\eta` (a magnetic diffusivity in these units) the electric field
+gains :math:`\eta\mathbf J`, :math:`\mathbf J = \nabla\times\mathbf B`, and the energy flux
+:math:`\eta\,\mathbf J\times\mathbf B` (the Ohmic heating stays in the energy); the
+Lundquist number of a layer of length :math:`L` is :math:`S = L v_A/\eta`.
 
-$$
-B_x = B_{0x} + \partial_y A_z, \qquad B_y = B_{0y} - \partial_x A_z, \qquad
-\partial_t A_z = -E_z,
-$$
+**The mesh is patchwork's.** The model owns no grid: it allocates its fields on
+an `patchwork.AMRHierarchy` and uses the hierarchy's halo exchange, flux register
+and restriction. A uniform grid is a hierarchy of one level; refined patches
+are patches of finer levels, fixed or regridded on the current density
+(`MHD2D.current_tags`, `MHD2D.regrid`); all levels take the same time step.
 
-and $A_z$ sits on the nodes of the patches. The field through a face is the difference of
-$A_z$ at its two ends over its length, so $\nabla\cdot\mathbf B = 0$ holds in every cell to
-round-off: this is constrained transport (Evans and Hawley 1988) with the
-electromotive force at the cell corners, written for the potential. On a patch hierarchy
-the nodes that patches share have one value (`patchwork.AMRHierarchy.restrict` gives the
-coarse nodes under a finer patch the fine values), so a coarse face on the edge of a finer
-level carries the sum of the fluxes of its fine faces: the divergence vanishes on the
-composite mesh too, and a regrid, which interpolates $A_z$ bilinearly onto new patches,
-keeps it. In 3D the potential would be the edge field of patchwork's face space; patchwork
-has no edge-centred patch fields yet. $B_z$ is a conserved cell quantity.
+**The magnetic field.** The density, the momentum, the energy and :math:`B_z`
+are cell-centered conserved fields. The in-plane field is the curl of a vector
+potential :math:`A_z` on the nodes, plus a uniform mean field
+:math:`\mathbf B_0`:
 
-**Numerics.** Finite volumes on the cells of each patch: MUSCL reconstruction of the
-primitive variables ($\rho$, $\mathbf v$, $p$, the tangential field) with a slope
-limiter, the normal field taken from the face, the HLLD flux (Miyoshi and Kusano 2005), and
-the corner electromotive force of Gardiner and Stone (2005, the $E_z^c$ upwinding by the
-mass flux). Resistivity adds $\eta J_z$ at the nodes, $\eta(J_x, J_y)$ to the flux of
-$B_z$ and $\eta\,\mathbf J\times\mathbf B$ to the energy flux, explicitly. Heun's method
-(SSP-RK2) with one time step for all levels; the fluxes through coarse–fine faces are
-matched by `patchwork.FluxRegister` (refluxing), so the integrals of $\rho$, $\rho\mathbf v$,
-$E$ and $B_z$ change by round-off only. The step is limited by the fast speed (CFL) and by
-the resistive diffusion of the finest cells.
+.. math::
 
-**Scope.** patchwork is an optional dependency (``pip install "plasma-carafe[spatial]"``),
-imported when a model is made. Periodic boxes in the plane (slab geometry); no viscosity, conduction or Hall
-term yet. The ``"carafe.mhd_step"`` profiling region times each step.
+    B_x = B_{0x} + \partial_y A_z, \qquad B_y = B_{0y} - \partial_x A_z,
 
-**MPI.** The model runs on any hierarchy over a communicator and gives the results of one
-rank to round-off. Each rank's block of a patch needs at least three nodes along the split
-axis (the halo of the potential): with many small patches, place each on one rank
-(``AMRHierarchy(..., placement="morton")`` or ``"balanced"``) rather than splitting every
-patch over all ranks (``"all"``, the default).
+taken as the flux through every cell face (the difference of :math:`A_z` at the
+face's two nodes). This is the face (Raviart–Thomas) value of the field as the
+rotated gradient of a nodal (Q1) potential, the 2D form of constrained transport:
+the discrete divergence of every cell is zero to round-off whatever :math:`A_z`
+is, and :math:`A_z` advances with the electric field at the nodes,
+:math:`\partial_t A_z = -E_z`. On a refined hierarchy the nodes a coarse and a fine
+patch share carry the fine value (`patchwork.AMRHierarchy.restrict`), so the flux
+through a coarse face equals the sum of the fine fluxes through it, and the
+divergence of the composite mesh is zero to round-off as well. :math:`\mathbf B_0`
+lets a periodic domain carry a net flux, which a periodic :math:`A_z` cannot.
+
+**Numerics.** MUSCL reconstruction of the primitive variables (the slope limiters
+of `carafe.limiters`), the HLLD Riemann solver (Miyoshi and Kusano 2005) with the
+face-normal field taken from :math:`A_z`, the electric field at the nodes by the
+upwind "CT-contact" average of the face fluxes (Gardiner and Stone 2005), Heun's
+method (SSP-RK2), and refluxing (`patchwork.FluxRegister`) at coarse–fine faces.
+Where a reconstructed density or pressure is not positive the face falls back to
+first order. The resistive terms are explicit (``J_z`` at the nodes from the face fields,
+``J_x``, ``J_y`` at the faces from ``B_z``), and the step keeps within the diffusion
+limit of the finest cells.
+
+**Boundaries.** Periodic axes are those the hierarchy declares periodic; the faces
+of the other axes are outflow (zero-gradient) boundaries.
+
+patchwork is an optional dependency of carafe (the ``spatial`` extra): install it to
+use this module.
+
+**Regridding.** `MHD2D.regrid` moves the conserved fields (their integrals kept) and
+interpolates :math:`A_z` bilinearly onto new patches, so the field stays
+divergence-free; a state can be set again on the new patches (`set_state`), e.g. to
+resolve an initial current sheet the base level cannot.
+
+**Not yet.** Anisotropic conduction, viscosity, gravity, walls, the r–z metric and
+graded axes; MPI is parallel over patches (the fields of a patch are not split between
+ranks): place the patches with ``placement="morton"`` or ``"balanced"``.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
+import xarray as xr
 from methodcard import ConvergenceProblem, method
 from scope_profiler import profile
 
 from carafe._profiling import _PROFILE_TAGS
-from carafe.gasdynamics import LIMITERS
+from carafe.datasets import variable
+from carafe.limiters import LIMITERS
 
 if TYPE_CHECKING:
     from patchwork import AMRHierarchy, Patch
 
 __all__ = ["CONSERVED", "MHD2D", "hlld_flux"]
 
-#: The cell fields of the conserved variables, in this order.
-CONSERVED = ("rho", "mx", "my", "mz", "energy", "bz")
-#: The node field of the vector potential.
-POTENTIAL = "az"
-#: Halo width of every field (MUSCL needs two cells beyond a face).
+#: Halo width of every field: two cells for the MUSCL stencil of a face.
 HALO = 2
-_DENSITY_FLOOR = 1e-12
-_PRESSURE_FLOOR = 1e-12
+#: The cell-centered conserved fields, in this order.
+CONSERVED = ("density", "momentum_x", "momentum_y", "momentum_z", "energy", "bz")
+#: Relative size below which the HLLD star-state denominator counts as zero.
+_DEGENERATE = 1.0e-12
 
-Function = Callable[[np.ndarray, np.ndarray], Any]
+Value = float | np.ndarray | Callable[..., Any]
 
 
-# -- the Riemann solver ---------------------------------------------------------------
-
-
+# The Riemann solver --------------------------------------------------------------#
 def _fast_speed(rho, p, bn, bt1, bt2, gamma):
-    gp = gamma * p
-    b2 = bn * bn + bt1 * bt1 + bt2 * bt2
-    disc = np.sqrt(np.maximum((gp + b2) ** 2 - 4.0 * gp * bn * bn, 0.0))
-    return np.sqrt(np.maximum((gp + b2 + disc) / (2.0 * rho), 0.0))
+    """The fast magnetosonic speed along the normal."""
+    a2 = gamma * p / rho
+    b2 = (bn**2 + bt1**2 + bt2**2) / rho
+    root = np.sqrt(np.maximum((a2 + b2) ** 2 - 4.0 * a2 * bn**2 / rho, 0.0))
+    return np.sqrt(0.5 * (a2 + b2 + root))
+
+
+def _conserved(state, bn, gamma):
+    """Conserved variables (rho, m_n, m_t1, m_t2, E, B_t1, B_t2) of a normal state."""
+    rho, vn, vt1, vt2, p, bt1, bt2 = state
+    energy = (
+        p / (gamma - 1.0)
+        + 0.5 * rho * (vn**2 + vt1**2 + vt2**2)
+        + 0.5 * (bn**2 + bt1**2 + bt2**2)
+    )
+    return np.stack((rho, rho * vn, rho * vt1, rho * vt2, energy, bt1, bt2))
+
+
+def _flux(state, cons, bn):
+    """The flux along the normal of a state and its conserved variables."""
+    rho, vn, vt1, vt2, p, bt1, bt2 = state
+    pt = p + 0.5 * (bn**2 + bt1**2 + bt2**2)
+    vb = vn * bn + vt1 * bt1 + vt2 * bt2
+    return np.stack(
+        (
+            rho * vn,
+            rho * vn**2 + pt - bn**2,
+            rho * vn * vt1 - bn * bt1,
+            rho * vn * vt2 - bn * bt2,
+            (cons[4] + pt) * vn - bn * vb,
+            bt1 * vn - bn * vt1,
+            bt2 * vn - bn * vt2,
+        )
+    )
 
 
 @method(
     equations={
-        "speeds": r"S_L = \min(u_L, u_R) - \max(c_{f,L}, c_{f,R}), \quad S_R = \max(u_L, u_R) + \max(c_{f,L}, c_{f,R}), \quad S_M = \frac{(S_R - u_R)\rho_R u_R - (S_L - u_L)\rho_L u_L - p_{T,R} + p_{T,L}}{(S_R - u_R)\rho_R - (S_L - u_L)\rho_L}",
-        "alfven": r"S_L^* = S_M - \frac{|B_n|}{\sqrt{\rho_L^*}}, \qquad S_R^* = S_M + \frac{|B_n|}{\sqrt{\rho_R^*}}, \qquad \rho_\alpha^* = \rho_\alpha\frac{S_\alpha - u_\alpha}{S_\alpha - S_M}",
-        "flux": r"F = F_L,\ F_L^*,\ F_L^{**},\ F_R^{**},\ F_R^*,\ F_R \quad\text{as } 0 \text{ lies in } (-\infty, S_L),\ (S_L, S_L^*),\ (S_L^*, S_M),\ (S_M, S_R^*),\ (S_R^*, S_R),\ (S_R, \infty)",
+        "speeds": r"S_L = \min(u_L, u_R) - \max(c_{fL}, c_{fR}), \quad S_R = \max(u_L, u_R) + \max(c_{fL}, c_{fR}), \quad S_L^* = S_M - \frac{|B_n|}{\sqrt{\rho_L^*}}, \quad S_R^* = S_M + \frac{|B_n|}{\sqrt{\rho_R^*}}",
+        "contact": r"S_M = \frac{(S_R - u_R)\rho_R u_R - (S_L - u_L)\rho_L u_L - p_{TR} + p_{TL}}{(S_R - u_R)\rho_R - (S_L - u_L)\rho_L}",
+        "star": r"\rho^*_K = \rho_K\frac{S_K - u_K}{S_K - S_M}, \quad \mathbf v^*_{tK} = \mathbf v_{tK} - B_n\mathbf B_{tK}\frac{S_M - u_K}{\rho_K(S_K - u_K)(S_K - S_M) - B_n^2}, \quad \mathbf B^*_{tK} = \mathbf B_{tK}\frac{\rho_K(S_K - u_K)^2 - B_n^2}{\rho_K(S_K - u_K)(S_K - S_M) - B_n^2}",
+        "double_star": r"\mathbf v^{**}_t = \frac{\sqrt{\rho_L^*}\mathbf v^*_{tL} + \sqrt{\rho_R^*}\mathbf v^*_{tR} + (\mathbf B^*_{tR} - \mathbf B^*_{tL})\operatorname{sgn}B_n}{\sqrt{\rho_L^*} + \sqrt{\rho_R^*}}",
     },
     assumptions=(
-        "four intermediate states: the total pressure and the normal velocity constant across the fan, the density only jumps at the fast waves",
-        "exact for isolated contacts, tangential and rotational discontinuities; the degenerate star states (no normal field) fall back to the outer ones",
+        "ideal MHD, a gamma-law gas; the normal field is one value on both sides of the face",
+        "where the star denominator vanishes (B_t = 0 and B_n^2 = rho (S - u)(S - S_M)) the tangential velocity and field keep their values",
     ),
     references=(
         "[Miyoshi and Kusano, J. Comput. Phys. 208, 315 (2005)](https://doi.org/10.1016/j.jcp.2005.02.017)",
     ),
 )
 def hlld_flux(
-    left: Sequence[np.ndarray],
-    right: Sequence[np.ndarray],
-    bn: np.ndarray,
-    gamma: float,
-) -> tuple[np.ndarray, ...]:
-    """The HLLD flux (Miyoshi and Kusano 2005) through faces of normal field ``bn``.
+    left: np.ndarray, right: np.ndarray, bn: np.ndarray, gamma: float
+) -> np.ndarray:
+    """The HLLD flux through faces between two states.
 
-    ``left`` and ``right`` are the primitive states ``(rho, vn, vt1, vt2, p, bt1, bt2)``
-    on the two sides of each face (normal and two tangential components, a right-handed
-    order is not needed). Returns the fluxes of ``(rho, rho vn, rho vt1, rho vt2, E, bt1,
-    bt2)`` along the normal, with ``E`` the total energy density and the magnetic
-    pressure ``B^2 / 2``.
+    Args:
+        left: The state left of each face, ``(7, ...)``: density, normal velocity,
+            the two tangential velocities, pressure and the two tangential field
+            components.
+        right: The state right of each face, the same way.
+        bn: The normal field at each face, ``(...)``.
+        gamma: The adiabatic index.
+
+    Returns:
+        The flux of (density, normal momentum, the two tangential momenta, energy,
+        the two tangential field components), ``(7, ...)``.
     """
-    rl, ul, vl, wl, pl, byl, bzl = (np.asarray(q, dtype=float) for q in left)
-    rr, ur, vr, wr, pr, byr, bzr = (np.asarray(q, dtype=float) for q in right)
-    bx = np.asarray(bn, dtype=float)
-    bx2 = bx * bx
+    left = np.asarray(left, dtype=float)
+    right = np.asarray(right, dtype=float)
+    bn = np.asarray(bn, dtype=float)
+    ul, ur = _conserved(left, bn, gamma), _conserved(right, bn, gamma)
+    fl, fr = _flux(left, ul, bn), _flux(right, ur, bn)
+    rl, vl, pl = left[0], left[1], left[4]
+    rr, vr, pr = right[0], right[1], right[4]
+    ptl = pl + 0.5 * (bn**2 + left[5] ** 2 + left[6] ** 2)
+    ptr = pr + 0.5 * (bn**2 + right[5] ** 2 + right[6] ** 2)
+    cf = np.maximum(
+        _fast_speed(rl, pl, bn, left[5], left[6], gamma),
+        _fast_speed(rr, pr, bn, right[5], right[6], gamma),
+    )
+    sl = np.minimum(vl, vr) - cf
+    sr = np.maximum(vl, vr) + cf
+    dl, dr = (sl - vl) * rl, (sr - vr) * rr
+    sm = (dr * vr - dl * vl - ptr + ptl) / (dr - dl)
+    pts = (dr * ptl - dl * ptr + dl * dr * (vr - vl)) / (dr - dl)
 
-    def conserved(r, u, v, w, p, by, bz):
-        b2 = bx2 + by * by + bz * bz
-        energy = p / (gamma - 1.0) + 0.5 * r * (u * u + v * v + w * w) + 0.5 * b2
-        return energy, p + 0.5 * b2
-
-    el, ptl = conserved(rl, ul, vl, wl, pl, byl, bzl)
-    er, ptr = conserved(rr, ur, vr, wr, pr, byr, bzr)
-
-    def flux(r, u, v, w, by, bz, e, pt):
-        vb = u * bx + v * by + w * bz
+    def star(state, cons, s, d, pt):
+        vn = state[1]
+        rho_s = d / (s - sm)
+        den = d * (s - sm) - bn**2
+        degenerate = np.abs(den) < _DEGENERATE * (pt + bn**2)
+        safe = np.where(degenerate, 1.0, den)
+        vt = np.where(
+            degenerate, state[2:4], state[2:4] - bn * state[5:7] * (sm - vn) / safe
+        )
+        bt = np.where(
+            degenerate, state[5:7], state[5:7] * (d * (s - vn) - bn**2) / safe
+        )
+        vb = vn * bn + state[2] * state[5] + state[3] * state[6]
+        vb_s = sm * bn + vt[0] * bt[0] + vt[1] * bt[1]
+        energy = ((s - vn) * cons[4] - pt * vn + pts * sm + bn * (vb - vb_s)) / (s - sm)
         return (
-            r * u,
-            r * u * u + pt - bx2,
-            r * u * v - bx * by,
-            r * u * w - bx * bz,
-            (e + pt) * u - bx * vb,
-            by * u - bx * v,
-            bz * u - bx * w,
+            np.stack(
+                (rho_s, rho_s * sm, rho_s * vt[0], rho_s * vt[1], energy, bt[0], bt[1])
+            ),
+            vt,
+            bt,
         )
 
-    fl = flux(rl, ul, vl, wl, byl, bzl, el, ptl)
-    fr = flux(rr, ur, vr, wr, byr, bzr, er, ptr)
-    cfl = _fast_speed(rl, pl, bx, byl, bzl, gamma)
-    cfr = _fast_speed(rr, pr, bx, byr, bzr, gamma)
-    cmax = np.maximum(cfl, cfr)
-    sl = np.minimum(ul, ur) - cmax
-    sr = np.maximum(ul, ur) + cmax
-    dl = (sl - ul) * rl
-    dr = (sr - ur) * rr
-    denom = dr - dl
-    sm = (dr * ur - dl * ul - ptr + ptl) / denom
-    pts = (dr * ptl - dl * ptr + dl * dr * (ur - ul)) / denom
+    usl, vtl, btl = star(left, ul, sl, dl, ptl)
+    usr, vtr, btr = star(right, ur, sr, dr, ptr)
+    sql, sqr = np.sqrt(usl[0]), np.sqrt(usr[0])
+    sign = np.sign(bn)
+    vt2 = (sql * vtl + sqr * vtr + (btr - btl) * sign) / (sql + sqr)
+    bt2 = (sql * btr + sqr * btl + sql * sqr * (vtr - vtl) * sign) / (sql + sqr)
+    vb2 = sm * bn + vt2[0] * bt2[0] + vt2[1] * bt2[1]
 
-    def star(r, u, v, w, by, bz, e, pt, s):
-        rs = r * (s - u) / (s - sm)
-        d = r * (s - u) * (s - sm) - bx2
-        small = np.abs(d) < 1e-12 * np.maximum(pt, 1e-300)
-        safe = np.where(small, 1.0, d)
-        vs = np.where(small, v, v - bx * by * (sm - u) / safe)
-        ws = np.where(small, w, w - bx * bz * (sm - u) / safe)
-        factor = np.where(small, 1.0, (r * (s - u) ** 2 - bx2) / safe)
-        bys = by * factor
-        bzs = bz * factor
-        vb = u * bx + v * by + w * bz
-        vbs = sm * bx + vs * bys + ws * bzs
-        es = ((s - u) * e - pt * u + pts * sm + bx * (vb - vbs)) / (s - sm)
-        return rs, vs, ws, bys, bzs, es
-
-    rsl, vsl, wsl, bysl, bzsl, esl = star(rl, ul, vl, wl, byl, bzl, el, ptl, sl)
-    rsr, vsr, wsr, bysr, bzsr, esr = star(rr, ur, vr, wr, byr, bzr, er, ptr, sr)
-    sqrtl, sqrtr = np.sqrt(rsl), np.sqrt(rsr)
-    ssl = sm - np.abs(bx) / sqrtl
-    ssr = sm + np.abs(bx) / sqrtr
-    sign = np.sign(bx)
-    total = sqrtl + sqrtr
-    vss = (sqrtl * vsl + sqrtr * vsr + (bysr - bysl) * sign) / total
-    wss = (sqrtl * wsl + sqrtr * wsr + (bzsr - bzsl) * sign) / total
-    byss = (sqrtl * bysr + sqrtr * bysl + sqrtl * sqrtr * (vsr - vsl) * sign) / total
-    bzss = (sqrtl * bzsr + sqrtr * bzsl + sqrtl * sqrtr * (wsr - wsl) * sign) / total
-    vbss = sm * bx + vss * byss + wss * bzss
-    vbsl = sm * bx + vsl * bysl + wsl * bzsl
-    vbsr = sm * bx + vsr * bysr + wsr * bzsr
-    essl = esl - sqrtl * (vbsl - vbss) * sign
-    essr = esr + sqrtr * (vbsr - vbss) * sign
-
-    ul_ = (rl, rl * ul, rl * vl, rl * wl, el, byl, bzl)
-    ur_ = (rr, rr * ur, rr * vr, rr * wr, er, byr, bzr)
-    usl = (rsl, rsl * sm, rsl * vsl, rsl * wsl, esl, bysl, bzsl)
-    usr = (rsr, rsr * sm, rsr * vsr, rsr * wsr, esr, bysr, bzsr)
-    ussl = (rsl, rsl * sm, rsl * vss, rsl * wss, essl, byss, bzss)
-    ussr = (rsr, rsr * sm, rsr * vss, rsr * wss, essr, byss, bzss)
-
-    result = []
-    for k in range(7):
-        f_sl = fl[k] + sl * (usl[k] - ul_[k])
-        f_sr = fr[k] + sr * (usr[k] - ur_[k])
-        f_ssl = f_sl + ssl * (ussl[k] - usl[k])
-        f_ssr = f_sr + ssr * (ussr[k] - usr[k])
-        result.append(
-            np.select(
-                [sl > 0.0, ssl >= 0.0, sm >= 0.0, ssr >= 0.0, sr >= 0.0],
-                [fl[k], f_sl, f_ssl, f_ssr, f_sr],
-                default=fr[k],
-            )
+    def double_star(us, vt, bt, sq, side):
+        vb_s = sm * bn + vt[0] * bt[0] + vt[1] * bt[1]
+        energy = us[4] + side * sq * (vb_s - vb2) * sign
+        return np.stack(
+            (us[0], us[0] * sm, us[0] * vt2[0], us[0] * vt2[1], energy, bt2[0], bt2[1])
         )
-    return tuple(result)
+
+    uddl = double_star(usl, vtl, btl, sql, -1.0)
+    uddr = double_star(usr, vtr, btr, sqr, 1.0)
+    ssl = sm - np.abs(bn) / sql
+    ssr = sm + np.abs(bn) / sqr
+    fsl = fl + sl * (usl - ul)
+    fsr = fr + sr * (usr - ur)
+    return np.select(
+        [sl >= 0.0, ssl >= 0.0, sm >= 0.0, ssr >= 0.0, sr >= 0.0],
+        [fl, fsl, fsl + ssl * (uddl - usl), fsr + ssr * (uddr - usr), fsr],
+        fr,
+    )
 
 
-# -- the model ------------------------------------------------------------------------
+# Convergence problem -------------------------------------------------------------#
+def _alfven_problem() -> ConvergenceProblem:
+    """The oblique circularly polarized Alfvén wave after one period (Tóth 2000)."""
+
+    def error(h: float) -> float:
+        cells = round(1.0 / h)
+        model, exact = MHD2D.alfven_wave(cells, limiter="none")
+        model.run(model.period)
+        by = model.dataset()["magnetic_field_y"].values
+        return float(np.mean(np.abs(by - exact["magnetic_field_y"].values)))
+
+    return ConvergenceProblem(error, steps=[1 / 8, 1 / 16, 1 / 32])
 
 
-class _Block:
-    """The arrays of one rank's block of a patch, in the patch's global indices.
+# Helpers -------------------------------------------------------------------------#
+def _ct_contact(fx_by, gy_bx, fx_rho, gy_rho, ecc, nx, ny):
+    """``E_z`` at the nodes of a block by the CT-contact average (Gardiner and Stone 2005).
 
-    Cell ``(i, j)`` of the patch's level is at ``cells[:, i - ci, j - cj]`` and node
-    ``(i, j)`` at ``nodes[i - ni, j - nj]``; ``bounds`` are the cells of the block,
-    ``node_bounds`` the nodes it owns.
+    ``fx_*`` are x-face fluxes of the haloed block at x-faces ``2 .. X - 2`` (array
+    index ``k`` is x-face ``k + 2``) and all rows; ``gy_*`` y-face fluxes at all
+    columns and y-faces ``2 .. Y - 2``; ``ecc`` the cell electric field ``B_x u_y - B_y
+    u_x``. Returns ``E_z`` at the block's ``(nx + 1, ny + 1)`` nodes.
     """
+    h = HALO
+    # node (i, j) of the block is node (i + h, j + h) of the haloed block; the x-face
+    # at column i + h is fx index i + h - 2, the y-face at row j + h is gy index j + h - 2
+    ci = np.arange(nx + 1)[:, None] + h  # node columns, haloed
+    rj = np.arange(ny + 1)[None, :] + h  # node rows, haloed
 
-    def __init__(self, patch: Patch) -> None:
-        self.patch = patch
-        arrays = [patch.field(name) for name in CONSERVED]
-        layout = arrays[0].layout
-        self.bounds = tuple(
-            (patch.box[a][0] + b0, patch.box[a][0] + b1)
-            for a, (b0, b1) in enumerate(layout.index_bounds)
-        )
-        self.cells = np.stack([np.asarray(a.local_with_halos) for a in arrays])
-        potential = patch.field(POTENTIAL)
-        nlayout = potential.layout
-        self.node_bounds = tuple(
-            (patch.box[a][0] + b0, patch.box[a][0] + b1)
-            for a, (b0, b1) in enumerate(nlayout.index_bounds)
-        )
-        self.nodes = np.asarray(potential.local_with_halos)
-        self.ci = tuple(lo - HALO for lo, _ in self.bounds)
-        self.ni = tuple(
-            lo - h for (lo, _), h in zip(self.node_bounds, nlayout.halo, strict=True)
+    def fxb(col, row):
+        return fx_by[col - 2, row]
+
+    def gyb(col, row):
+        return gy_bx[col, row - 2]
+
+    def fxr(col, row):
+        return fx_rho[col - 2, row]
+
+    def gyr(col, row):
+        return gy_rho[col, row - 2]
+
+    def upwind(mass, positive, negative):
+        return np.where(
+            mass > 0.0,
+            positive,
+            np.where(mass < 0.0, negative, 0.5 * (positive + negative)),
         )
 
+    i, j = ci, rj
+    dl2 = upwind(
+        fxr(i, j - 1), gyb(i - 1, j) - ecc[i - 1, j - 1], gyb(i, j) - ecc[i, j - 1]
+    )
+    dr2 = upwind(fxr(i, j), gyb(i - 1, j) - ecc[i - 1, j], gyb(i, j) - ecc[i, j])
+    dl1 = upwind(
+        gyr(i - 1, j), -fxb(i, j - 1) - ecc[i - 1, j - 1], -fxb(i, j) - ecc[i - 1, j]
+    )
+    dr1 = upwind(gyr(i, j), -fxb(i, j - 1) - ecc[i, j - 1], -fxb(i, j) - ecc[i, j])
+    return 0.25 * (
+        gyb(i, j) + gyb(i - 1, j) - fxb(i, j) - fxb(i, j - 1) + dl1 + dr1 + dl2 + dr2
+    )
 
+
+def _outflow_cells(array: np.ndarray, axis: int, lower: bool, upper: bool) -> None:
+    """Zero-gradient halo cells at the domain's faces along ``axis``."""
+    h = HALO
+    moved = np.moveaxis(array, axis, 0)
+    if lower:
+        moved[:h] = moved[h]
+    if upper:
+        moved[-h:] = moved[-h - 1]
+
+
+def _outflow_nodes(array: np.ndarray, axis: int, lower: bool, upper: bool) -> None:
+    """Halo nodes of ``A_z`` extrapolated linearly at the domain's faces along ``axis``.
+
+    The field component that the gradient along ``axis`` gives (the tangential
+    field of the boundary face) then continues unchanged into the halo.
+    """
+    h = HALO
+    moved = np.moveaxis(array, axis, 0)
+    if lower:
+        edge, inner = moved[h].copy(), moved[h + 1].copy()
+        for k in range(1, h + 1):
+            moved[h - k] = edge + k * (edge - inner)
+    if upper:
+        edge, inner = moved[-h - 1].copy(), moved[-h - 2].copy()
+        for k in range(1, h + 1):
+            moved[-h - 1 + k] = edge + k * (edge - inner)
+
+
+# The model -----------------------------------------------------------------------#
 @method(
     equations={
-        "mass": r"\partial_t\rho + \nabla\cdot(\rho\mathbf v) = 0",
-        "momentum": r"\partial_t(\rho\mathbf v) + \nabla\cdot\big(\rho\mathbf v\mathbf v + (p + \tfrac12B^2)\mathsf I - \mathbf B\mathbf B\big) = 0",
-        "energy": r"\partial_t E + \nabla\cdot\big((E + p + \tfrac12B^2)\mathbf v - (\mathbf v\cdot\mathbf B)\mathbf B + \eta\mathbf J\times\mathbf B\big) = 0, \qquad E = \frac{p}{\gamma-1} + \tfrac12\rho v^2 + \tfrac12B^2",
-        "field": r"B_x = B_{0x} + \partial_y A_z,\quad B_y = B_{0y} - \partial_x A_z,\quad \partial_t A_z = -E_z,\quad \partial_t B_z = -(\nabla\times\mathbf E)_z, \quad \mathbf E = -\mathbf v\times\mathbf B + \eta\nabla\times\mathbf B",
+        "mass": r"\partial_t\rho + \nabla\cdot(\rho\mathbf u) = 0",
+        "momentum": r"\partial_t(\rho\mathbf u) + \nabla\cdot\big(\rho\mathbf u\mathbf u + p_T\mathbf I - \mathbf B\mathbf B\big) = 0, \qquad p_T = p + \tfrac12|\mathbf B|^2",
+        "energy": r"\partial_t E + \nabla\cdot\big((E + p_T)\mathbf u - (\mathbf u\cdot\mathbf B)\mathbf B\big) = 0, \qquad E = \frac{p}{\gamma - 1} + \tfrac12\rho|\mathbf u|^2 + \tfrac12|\mathbf B|^2",
+        "field": r"B_x = B_{0x} + \partial_y A_z, \quad B_y = B_{0y} - \partial_x A_z, \quad \partial_t A_z = -E_z = u_x B_y - u_y B_x - \eta J_z, \quad \partial_t B_z + \nabla\cdot(B_z\mathbf u - u_z\mathbf B) = \eta\nabla^2 B_z",
+        "resistive": r"\mathbf E \mathrel{+}= \eta\mathbf J, \quad \mathbf J = \nabla\times\mathbf B, \quad \text{energy flux} \mathrel{+}= \eta\,\mathbf J\times\mathbf B",
+        "ct_contact": r"E_z = \tfrac14\big(\textstyle\sum_\text{faces} E_z^f\big) + \tfrac14\big(\textstyle\sum_\text{4 half-faces} (E_z^f - E_z^c)_\text{upwind}\big)",
     },
     order=2,
     assumptions=(
-        r"units with $\mu_0 = 1$; periodic boxes in the plane; uniform resistivity $\eta$, explicit",
-        r"$A_z$ on the patch nodes, so $\nabla\cdot\mathbf B = 0$ to round-off on the composite mesh and across regrids",
-        r"MUSCL on the primitives (van Leer by default), HLLD, Gardiner–Stone corner EMF, Heun (SSP-RK2), one step for all levels, refluxing",
-        "the order is that of the circularly polarised Alfvén wave with the unlimited reconstruction",
+        r"MHD in the plane with three velocity and field components; Heaviside–Lorentz units ($\mu_0 = 1$); uniform resistivity $\eta$, explicit",
+        r"in-plane field from a nodal $A_z$: zero discrete divergence per cell and on the composite mesh, to round-off",
+        r"MUSCL on the primitives, HLLD, CT-contact electric field, Heun (SSP-RK2) at CFL 0.4; refluxing at coarse–fine faces",
+        r"Cartesian, uniform levels, one time step for all levels; periodic or outflow faces; regridding interpolates $A_z$ bilinearly",
+        r"the order is that of a smooth Alfvén wave with the unlimited reconstruction",
     ),
     references=(
-        "[Miyoshi and Kusano, J. Comput. Phys. 208, 315 (2005)](https://doi.org/10.1016/j.jcp.2005.02.017)",
         "[Gardiner and Stone, J. Comput. Phys. 205, 509 (2005)](https://doi.org/10.1016/j.jcp.2004.11.016)",
-        "[Evans and Hawley, Astrophys. J. 332, 659 (1988)](https://doi.org/10.1086/166684)",
         "[Tóth, J. Comput. Phys. 161, 605 (2000)](https://doi.org/10.1006/jcph.2000.6519)",
     ),
     components=(hlld_flux,),
-    problem=lambda: _alfven_problem(),
+    problem=_alfven_problem,
 )
 class MHD2D:
-    """Compressible MHD in a periodic plane on a patchwork hierarchy; see the module.
+    """Ideal MHD (2.5D) on the patches of a patchwork hierarchy; see the module docstring.
 
     Args:
-        hierarchy: A 2D `patchwork.AMRHierarchy`, periodic along both axes. The model
-            allocates its fields on it (the conserved cell fields `CONSERVED` and the
-            node field ``"az"``, all with a halo of two).
+        hierarchy: The 2D Cartesian hierarchy the fields live on. Its periodic axes
+            are periodic; the faces of the others are outflow boundaries.
         gamma: The adiabatic index.
-        resistivity: The uniform resistivity ``eta`` (a magnetic diffusivity in these
-            units); 0 for ideal MHD.
-        mean_field: The uniform in-plane field ``(B0x, B0y)``.
-        limiter: ``"minmod"``, ``"vanleer"`` (default), ``"mc"`` or ``"none"`` (central
-            slopes, for convergence tests only).
-        cfl: The Courant number of the fast waves (and the share of the explicit
-            diffusion limit the resistive step may use).
-
-    Attributes:
-        hierarchy: The current hierarchy (`regrid` replaces it).
-        time: The time reached.
-        steps: The number of steps taken.
+        mean_field: The uniform in-plane field ``(B0x, B0y)`` added to the curl of
+            ``A_z``.
+        resistivity: The uniform resistivity ``eta`` (a magnetic diffusivity); 0 for
+            ideal MHD.
+        limiter: The slope limiter of the reconstruction (`carafe.limiters`):
+            ``"minmod"``, ``"vanleer"`` (default), ``"mc"`` or ``"none"``.
+        cfl: The Courant number.
+        prefix: The prefix of the names of the fields the model allocates on the
+            hierarchy (``prefix + "density"``, ..., ``prefix + "az"``).
     """
-
-    def _use(self, hierarchy: AMRHierarchy) -> None:
-        from patchwork import CompositeCells, FluxRegister
-
-        self.hierarchy = hierarchy
-        self._cells = CompositeCells(hierarchy)
-        self._register = FluxRegister(hierarchy, self._cells)
 
     def __init__(
         self,
         hierarchy: AMRHierarchy,
         *,
         gamma: float = 5.0 / 3.0,
-        resistivity: float = 0.0,
         mean_field: tuple[float, float] = (0.0, 0.0),
+        resistivity: float = 0.0,
         limiter: str = "vanleer",
         cfl: float = 0.4,
+        prefix: str = "mhd_",
     ) -> None:
-        """Allocate the fields on ``hierarchy`` (the state is zero until `set_state`)."""
+        """Allocate the fields on ``hierarchy``; set the state with `set_state`."""
         if hierarchy.ndim != 2:
             raise ValueError("MHD2D needs a 2D hierarchy")
-        if not all(hierarchy.periodic):
-            raise ValueError("MHD2D supports periodic boxes only (both axes periodic)")
-        if hierarchy.cylindrical or getattr(hierarchy, "graded", False):
-            raise ValueError("MHD2D needs a uniform Cartesian hierarchy")
-        if limiter not in LIMITERS:
-            raise ValueError(
-                f"limiter must be one of {sorted(LIMITERS)}, got {limiter!r}"
+        if hierarchy.cylindrical or hierarchy.graded:
+            raise NotImplementedError(
+                "MHD2D is Cartesian on uniform levels: no r–z metric, no graded axes"
             )
-        if resistivity < 0:
+        if limiter not in LIMITERS:
+            raise ValueError(f"limiter is one of {sorted(LIMITERS)}")
+        if not 0.0 < cfl <= 1.0:
+            raise ValueError("cfl must be in (0, 1]")
+        if gamma <= 1.0:
+            raise ValueError("gamma must be larger than 1")
+        if not resistivity >= 0.0:
             raise ValueError("resistivity must be non-negative")
+        self.hierarchy = hierarchy
         self.gamma = float(gamma)
-        self.resistivity = float(resistivity)
         self.mean_field = (float(mean_field[0]), float(mean_field[1]))
+        self.resistivity = float(resistivity)
         self.limiter = limiter
         self.cfl = float(cfl)
+        self.names = {name: prefix + name for name in CONSERVED}
+        self.potential = prefix + "az"
+        for name in CONSERVED:
+            hierarchy.allocate_field(
+                self.names[name], halo=HALO, split=None, conservative=True
+            )
+        hierarchy.allocate_field(
+            self.potential, halo=HALO, split=None, centering="node"
+        )
+        from patchwork import FluxRegister
+
+        self.periodic = tuple(hierarchy.periodic)
+        self.register = FluxRegister(hierarchy)
         self.time = 0.0
         self.steps = 0
-        for name in CONSERVED:
-            if name not in hierarchy.field_names:
-                hierarchy.allocate_field(name, halo=HALO, conservative=True)
-        if POTENTIAL not in hierarchy.field_names:
-            # one node more than the cells: a block of a patch split over ranks may
-            # start one node after its first cell
-            hierarchy.allocate_field(POTENTIAL, halo=HALO + 1, centering="node")
-        self._use(hierarchy)
+        #: The period of the wave `alfven_wave` sets up (NaN otherwise).
+        self.period = float("nan")
+        self._ready = False
 
-    def _face_field(self, block: _Block) -> tuple[np.ndarray, np.ndarray]:
-        """``Bx`` on the x-faces and ``By`` on the y-faces of the block's storage.
+    # Construction of common cases ---------------------------------------------#
+    @classmethod
+    def alfven_wave(
+        cls, cells: int, *, amplitude: float = 0.1, **options: Any
+    ) -> tuple[MHD2D, xr.Dataset]:
+        """The oblique circularly polarized Alfvén wave (Tóth 2000), and its exact state.
 
-        ``bxf[i, j]``: x-face at node column ``i``, cell row ``j``; ``byf[i, j]``: y-face
-        at cell column ``i``, node row ``j``; both indexed like the cells, offset
-        ``block.ci`` (a face at node ``i`` has index ``i - ci``).
+        A periodic box of ``2 cells x cells`` cells over ``[0, 2] x [0, 1]``; the
+        wave travels at the angle ``atan(2)`` to ``x`` with wavelength ``2 /
+        sqrt(5)``, density 1, pressure 0.1 and a parallel field of 1, so the
+        Alfvén speed is 1. The exact solution after a whole number of periods
+        (`period`) is the initial state, which the second item returns.
         """
-        dx, dy = self.hierarchy.spacing(block.patch.level)
-        a = block.nodes
-        ncx, ncy = block.cells.shape[1:]
-        # the nodes in a frame aligned with the cells: node i at frame index i - ci
-        frame = np.full((ncx + 1, ncy + 1), np.nan)
-        source, target = [], []
-        for axis, size in enumerate(frame.shape):
-            first = max(block.ci[axis], block.ni[axis])
-            last = min(block.ci[axis] + size, block.ni[axis] + a.shape[axis])
-            target.append(slice(first - block.ci[axis], last - block.ci[axis]))
-            source.append(slice(first - block.ni[axis], last - block.ni[axis]))
-        frame[tuple(target)] = a[tuple(source)]
-        if np.isnan(frame).any():  # a limiter would turn it into a zero slope
-            raise RuntimeError("the potential's halo does not cover the cells' halo")
-        bxf = np.empty((ncx + 1, ncy))
-        byf = np.empty((ncx, ncy + 1))
-        bxf[...] = self.mean_field[0] + (frame[:, 1:] - frame[:, :-1]) / dy
-        byf[...] = self.mean_field[1] - (frame[1:, :] - frame[:-1, :]) / dx
-        return bxf, byf
+        from patchwork import AMRHierarchy
 
-    def _cell_field(self, block: _Block) -> tuple[np.ndarray, np.ndarray]:
-        bxf, byf = self._face_field(block)
-        return 0.5 * (bxf[1:] + bxf[:-1]), 0.5 * (byf[:, 1:] + byf[:, :-1])
+        hierarchy = AMRHierarchy(
+            (2 * cells, cells), ((0.0, 2.0), (0.0, 1.0)), periodic=(True, True)
+        )
+        angle = np.arctan2(2.0, 1.0)
+        kx, ky = np.cos(angle), np.sin(angle)
+        wavelength = 2.0 / np.sqrt(5.0)
+        k = 2.0 * np.pi / wavelength
 
-    # -- state ----------------------------------------------------------------------
+        def phase(x, y):
+            return k * (kx * x + ky * y)
+
+        def perp(x, y):  # the in-plane perpendicular field and velocity amplitude
+            return amplitude * np.sin(phase(x, y))
+
+        def velocity(x, y):
+            b_perp = perp(x, y)
+            bz = amplitude * np.cos(phase(x, y))
+            # a wave travelling along +k: v_perp = -B_perp / sqrt(rho)
+            return (b_perp * ky, -b_perp * kx, -bz)
+
+        model = cls(hierarchy, mean_field=(kx, ky), **options)
+        model.set_state(
+            1.0,
+            velocity,
+            0.1,
+            vector_potential=lambda x, y: amplitude / k * np.cos(phase(x, y)),
+            bz=lambda x, y: amplitude * np.cos(phase(x, y)),
+        )
+        model.period = float(wavelength)
+        exact = model.dataset()
+        return model, exact
+
+    @classmethod
+    def orszag_tang(cls, cells: int, **options: Any) -> MHD2D:
+        """The Orszag–Tang vortex on the periodic unit square, ``cells`` per side.
+
+        Density ``25 / (36 pi)``, pressure ``5 / (12 pi)``, velocity
+        ``(-sin 2 pi y, sin 2 pi x)``, field ``(-sin 2 pi y, sin 4 pi x) / sqrt(4 pi)``
+        (Gardiner and Stone 2005), ``gamma = 5/3``.
+        """
+        from patchwork import AMRHierarchy
+
+        hierarchy = AMRHierarchy(
+            (cells, cells), ((0.0, 1.0), (0.0, 1.0)), periodic=(True, True)
+        )
+        model = cls(hierarchy, **options)
+        b0 = 1.0 / np.sqrt(4.0 * np.pi)
+        model.set_state(
+            25.0 / (36.0 * np.pi),
+            lambda x, y: (-np.sin(2 * np.pi * y), np.sin(2 * np.pi * x), 0.0 * x),
+            5.0 / (12.0 * np.pi),
+            vector_potential=lambda x, y: (
+                b0
+                * (
+                    np.cos(4 * np.pi * x) / (4 * np.pi)
+                    + np.cos(2 * np.pi * y) / (2 * np.pi)
+                )
+            ),
+        )
+        return model
+
+    # State ------------------------------------------------------------------#
+    @staticmethod
+    def _evaluate(value: Value, x: np.ndarray, y: np.ndarray) -> np.ndarray:
+        if callable(value):
+            return np.broadcast_to(np.asarray(value(x, y), dtype=float), x.shape)
+        return np.broadcast_to(np.asarray(value, dtype=float), x.shape)
+
+    def _cell_field(
+        self, patch: Patch, az: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Cell-centered in-plane field of a patch from its nodal ``A_z`` (no halo)."""
+        dx, dy = self.hierarchy.spacing(patch.level)
+        bxf = (az[:, 1:] - az[:, :-1]) / dy + self.mean_field[0]
+        byf = -(az[1:, :] - az[:-1, :]) / dx + self.mean_field[1]
+        return 0.5 * (bxf[:-1] + bxf[1:]), 0.5 * (byf[:, :-1] + byf[:, 1:])
 
     def set_state(
         self,
+        density: Value,
+        velocity: Value | tuple[Value, Value, Value],
+        pressure: Value,
         *,
-        density: float | Function,
-        velocity: Sequence[float | Function] = (0.0, 0.0, 0.0),
-        pressure: float | Function,
-        potential: float | Function = 0.0,
-        bz: float | Function = 0.0,
+        vector_potential: Value = 0.0,
+        bz: Value = 0.0,
     ) -> None:
-        """Set the state from numbers or functions of ``(x, y)``.
+        """Set the state on every patch.
 
-        ``density``, ``velocity`` (three components), ``pressure`` and ``bz`` at the cell
-        centres, ``potential`` (``A_z``) at the nodes; the in-plane field is the mean
-        field plus the curl of the potential. The energy is set from the pressure and
-        the field of the cells (the mean of their faces).
+        Each argument is a number, an array of the patch's shape (only for a
+        hierarchy of one patch) or a function of the cell-centre coordinates
+        ``(x, y)`` (of the node coordinates for ``vector_potential``).
+        ``velocity`` is a function returning the three components, or a tuple of
+        three values. The in-plane field is ``mean_field`` plus the curl of
+        ``vector_potential``; ``bz`` is the out-of-plane field.
         """
-        mesh = self.hierarchy
+        hierarchy = self.hierarchy
+        gamma = self.gamma
+        for patch in hierarchy.local_patches:
+            x, y = patch.local_cell_centers(hierarchy, self.names["density"])
+            xn, yn = patch.local_node_coordinates(hierarchy, self.potential)
+            rho = self._evaluate(density, x, y)
+            if callable(velocity):
+                u, v, w = (np.broadcast_to(c, x.shape) for c in velocity(x, y))
+            elif isinstance(velocity, tuple | list) and len(velocity) == 3:
+                u, v, w = (self._evaluate(c, x, y) for c in velocity)
+            else:
+                raise ValueError("velocity is a function or three values")
+            p = self._evaluate(pressure, x, y)
+            if np.any(rho <= 0.0) or np.any(p <= 0.0):
+                raise ValueError("the density and the pressure must be positive")
+            az = self._evaluate(vector_potential, xn, yn)
+            patch.field(self.potential).local[...] = az
+            bx, by = self._cell_field(patch, az)
+            bzv = self._evaluate(bz, x, y)
+            values = {
+                "density": rho,
+                "momentum_x": rho * u,
+                "momentum_y": rho * v,
+                "momentum_z": rho * w,
+                "energy": p / (gamma - 1.0)
+                + 0.5 * rho * (u**2 + v**2 + w**2)
+                + 0.5 * (bx**2 + by**2 + bzv**2),
+                "bz": bzv,
+            }
+            for name, value in values.items():
+                patch.field(self.names[name]).local[...] = value
+        for name in self.names.values():
+            hierarchy.restrict(name)
+        hierarchy.restrict(self.potential)
+        self.time = 0.0
+        self.steps = 0
+        self._ready = True
 
-        def value(source, x, y):
-            result = source(x, y) if callable(source) else source
-            return np.broadcast_to(np.asarray(result, dtype=float), x.shape)
+    def _check_ready(self) -> None:
+        if not self._ready:
+            raise RuntimeError("set the state first (set_state)")
 
-        for patch in mesh.local_patches:
-            x, y = patch.local_node_coordinates(mesh, POTENTIAL)
-            patch.field(POTENTIAL).local[...] = value(potential, x, y)
-        mesh.restrict(POTENTIAL)
-        mesh.exchange_halos(POTENTIAL)
-        for patch in mesh.local_patches:
-            x, y = patch.local_cell_centers(mesh, "rho")
-            rho = value(density, x, y)
-            v = [value(c, x, y) for c in velocity]
-            p = value(pressure, x, y)
-            b3 = value(bz, x, y)
-            block = _Block(patch)
-            bx, by = self._cell_field(block)
-            (b0, b1), (c0, c1) = block.bounds
-            sx = slice(b0 - block.ci[0], b1 - block.ci[0])
-            sy = slice(c0 - block.ci[1], c1 - block.ci[1])
-            bx, by = bx[sx, sy], by[sx, sy]
-            energy = (
-                p / (self.gamma - 1.0)
-                + 0.5 * rho * (v[0] ** 2 + v[1] ** 2 + v[2] ** 2)
-                + 0.5 * (bx**2 + by**2 + b3**2)
-            )
-            for name, q in zip(
-                CONSERVED,
-                (rho, rho * v[0], rho * v[1], rho * v[2], energy, b3),
-                strict=True,
-            ):
-                patch.field(name).local[...] = q
-        for name in CONSERVED:
-            mesh.restrict(name)
-            mesh.exchange_halos(name)
-
-    def _primitive(self, block: _Block) -> tuple[np.ndarray, ...]:
-        rho, mx, my, mz, energy, bz = block.cells
-        bx, by = self._cell_field(block)
-        rho = np.maximum(rho, _DENSITY_FLOOR)
-        vx, vy, vz = mx / rho, my / rho, mz / rho
-        p = (self.gamma - 1.0) * (
-            energy
-            - 0.5 * rho * (vx * vx + vy * vy + vz * vz)
-            - 0.5 * (bx * bx + by * by + bz * bz)
-        )
-        p = np.where(np.isnan(p), p, np.maximum(p, _PRESSURE_FLOOR))
-        return rho, vx, vy, vz, p, bx, by, bz
-
-    # -- fluxes and the electromotive force --------------------------------------------
-
-    def _reconstruct(self, q: np.ndarray, axis: int) -> tuple[np.ndarray, np.ndarray]:
-        """Left and right states at the faces between neighbours along ``axis``.
-
-        Face ``k`` (between cells ``k - 1`` and ``k`` of the storage) for ``k`` from 2 to
-        ``n - 2``: arrays of ``n - 3`` faces along ``axis``.
-        """
-        limiter = LIMITERS[self.limiter]
-        q = np.moveaxis(q, axis, 0)
-        diff = q[1:] - q[:-1]
-        slope = limiter(diff[:-1], diff[1:])  # cells 1 .. n - 2
-        left = q[1:-2] + 0.5 * slope[:-1]  # cells 1 .. n - 3, upper side
-        right = q[2:-1] - 0.5 * slope[1:]  # cells 2 .. n - 2, lower side
-        return np.moveaxis(left, 0, axis), np.moveaxis(right, 0, axis)
-
-    def _riemann(self, prim, normal_field, axis):
-        """Fluxes through the faces normal to ``axis``, storage faces 2 .. n - 2."""
-        rho, vx, vy, vz, p, bx, by, bz = prim
-        if axis == 0:
-            order = (rho, vx, vy, vz, p, by, bz)
-        else:
-            order = (rho, vy, vx, vz, p, bx, bz)
-        states = [self._reconstruct(q, axis) for q in order]
-        left = [s[0] for s in states]
-        right = [s[1] for s in states]
-        # fall back to the cell values where the reconstruction is not positive
-        bad = (left[0] <= 0) | (left[4] <= 0) | (right[0] <= 0) | (right[4] <= 0)
-        if np.any(bad):
-            take = [slice(None)] * 2
-            take[axis] = slice(1, -2)
-            lo = tuple(take)
-            take[axis] = slice(2, -1)
-            hi = tuple(take)
-            for k, q in enumerate(order):
-                left[k] = np.where(bad, q[lo], left[k])
-                right[k] = np.where(bad, q[hi], right[k])
-        take = [slice(None)] * 2
-        take[axis] = slice(2, -2)
-        bn = normal_field[tuple(take)]
-        return hlld_flux(left, right, bn, self.gamma)
-
-    def _resistive_fluxes(self, x_frame, y_frame, prim, jz, dx, dy) -> None:
-        """Add ``eta (Jx, Jy)`` to the flux of ``B_z`` and ``eta J x B`` to the energy flux."""
-        eta = self.resistivity
-        _, _, _, _, _, bx, by, bz = prim
-        ncx, ncy = bz.shape
-        # x-faces 1 .. ncx - 1 of the frame (between cells k - 1, k)
-        jy = -(bz[1:] - bz[:-1]) / dx
-        bz_face = 0.5 * (bz[1:] + bz[:-1])
-        by_face = 0.5 * (by[1:] + by[:-1])
-        jz_xface = np.full((ncx - 1, ncy), np.nan)
-        jz_xface[:, 1:-1] = 0.5 * (jz[:, 1:] + jz[:, :-1])
-        x_frame[6][1:-1] += eta * jy  # flux of Bz along x: E_y = eta J_y
-        x_frame[4][1:-1] += eta * (jy * bz_face - jz_xface * by_face)
-        jx = (bz[:, 1:] - bz[:, :-1]) / dy
-        bz_face = 0.5 * (bz[:, 1:] + bz[:, :-1])
-        bx_face = 0.5 * (bx[:, 1:] + bx[:, :-1])
-        jz_yface = np.full((ncx, ncy - 1), np.nan)
-        jz_yface[1:-1, :] = 0.5 * (jz[1:, :] + jz[:-1, :])
-        y_frame[6][:, 1:-1] -= eta * jx  # flux of Bz along y: -E_x = -eta J_x
-        y_frame[4][:, 1:-1] += eta * (jz_yface * bx_face - jx * bz_face)
-
-    def _fluxes_unguarded(self, block: _Block) -> dict[str, Any]:
-        mesh = self.hierarchy
-        dx, dy = mesh.spacing(block.patch.level)
-        prim = self._primitive(block)
-        rho, vx, vy, vz, p, bx, by, bz = prim
-        bxf, byf = self._face_field(block)
-        # x-faces: storage faces 2 .. ncx - 2 (node index i = ci + k), all rows
-        fx = self._riemann(prim, bxf, 0)
-        fy = self._riemann(prim, byf, 1)
-        ncx, ncy = block.cells.shape[1:]
-        # flux arrays on a full face frame (nan where not computed)
-        x_frame = [np.full((ncx + 1, ncy), np.nan) for _ in range(7)]
-        y_frame = [np.full((ncx, ncy + 1), np.nan) for _ in range(7)]
-        for k in range(7):
-            x_frame[k][2 : ncx - 1] = fx[k]
-            y_frame[k][:, 2 : ncy - 1] = fy[k]
-        # E_z on the faces: -F_x(By) and G_y(Bx); in the y-sweep the first tangential
-        # field is Bx
-        ex_face = -x_frame[5]
-        ey_face = y_frame[5]
-        e_cell = vy * bx - vx * by
-        mass_x = x_frame[0]
-        mass_y = y_frame[0]
-        # corner (node) values for nodes 1 .. ncx - 1 of the storage frame
-        e4 = 0.25 * (
-            ex_face[1:-1, 1:]
-            + ex_face[1:-1, :-1]
-            + ey_face[1:, 1:-1]
-            + ey_face[:-1, 1:-1]
-        )
-
-        def upwind(flux, a, b):
-            return np.where(flux > 0, a, np.where(flux < 0, b, 0.5 * (a + b)))
-
-        # (dE/dy) on x-face (i, row j) upwinded from cells i - 1 and i
-        # up: between the y-face below row j and the centre of row j
-        up_cells = e_cell - ey_face[:, :-1]  # cell (c, j): E_c - E(y-face below)
-        dn_cells = ey_face[:, 1:] - e_cell  # cell (c, j): E(y-face above) - E_c
-        d_up = upwind(mass_x[1:-1, 1:], up_cells[:-1, 1:], up_cells[1:, 1:])
-        d_dn = upwind(mass_x[1:-1, :-1], dn_cells[:-1, :-1], dn_cells[1:, :-1])
-        right_cells = e_cell - ex_face[:-1, :]  # cell (i, r): E_c - E(x-face left)
-        left_cells = ex_face[1:, :] - e_cell  # cell (i, r): E(x-face right) - E_c
-        d_right = upwind(mass_y[1:, 1:-1], right_cells[1:, :-1], right_cells[1:, 1:])
-        d_left = upwind(mass_y[:-1, 1:-1], left_cells[:-1, :-1], left_cells[:-1, 1:])
-        # integrated from the four face centres to the corner (GS05 eq. 41): in a flow
-        # along x alone it is the upwind E_z of the x-faces
-        ez = e4 + 0.25 * (d_dn - d_up) + 0.25 * (d_left - d_right)
-        # node frame: storage node k (k = 1 .. ncx - 1) is the corner of cells k - 1, k
-        jz = None
-        if self.resistivity > 0:
-            jz = (byf[1:, 1:-1] - byf[:-1, 1:-1]) / dx - (
-                bxf[1:-1, 1:] - bxf[1:-1, :-1]
-            ) / dy
-            ez = ez + self.resistivity * jz
-            self._resistive_fluxes(x_frame, y_frame, prim, jz, dx, dy)
-        return {"x": x_frame, "y": y_frame, "ez": ez}
-
-    def _fluxes(self, block: _Block) -> dict[str, Any]:
-        """Fluxes of the conserved fields through the block's faces, and ``E_z`` at its nodes.
-
-        Computed on the whole storage of the block; the points next to its outer edge,
-        which lack neighbours, are NaN and never used.
-        """
-        with np.errstate(invalid="ignore", divide="ignore"):
-            return self._fluxes_unguarded(block)
-
-    def _interior(self, block: _Block, arrays):
-        (b0, b1), (c0, c1) = block.bounds
-        sx = slice(b0 - block.ci[0], b1 - block.ci[0])
-        sy = slice(c0 - block.ci[1], c1 - block.ci[1])
-        return tuple(q[sx, sy] for q in arrays)
-
-    # -- time stepping -------------------------------------------------------------------
-
-    def stable_step(self) -> float:
-        """The largest stable time step over the hierarchy (collective)."""
-        smallest = np.inf
-        for patch in self.hierarchy.local_patches:
-            block = _Block(patch)
-            rho, vx, vy, vz, p, bx, by, bz = self._interior(
-                block, self._primitive(block)
-            )
-            dx, dy = self.hierarchy.spacing(patch.level)
-            cx = _fast_speed(rho, p, bx, by, bz, self.gamma)
-            cy = _fast_speed(rho, p, by, bx, bz, self.gamma)
-            rate = np.max((np.abs(vx) + cx) / dx + (np.abs(vy) + cy) / dy)
-            dt = self.cfl / rate
-            if self.resistivity > 0:
-                dt = min(dt, self.cfl * 0.5 / (self.resistivity * (dx**-2 + dy**-2)))
-            smallest = min(smallest, dt)
-        from maybempi import MPI
-
-        return float(self.hierarchy.comm.allreduce(smallest, op=MPI.MIN))
-
-    def _stage(self, dt: float) -> None:
-        """One forward-Euler stage of every field, recording the fluxes with ``dt / 2``."""
-        mesh = self.hierarchy
-        cache: dict[int, dict[str, Any]] = {}
-        blocks: dict[int, _Block] = {}
-        for patch in mesh.local_patches:
-            block = _Block(patch)
-            blocks[id(patch)] = block
-            cache[id(patch)] = self._fluxes(block)
-
-        # map the conserved fields to the flux components of each sweep:
-        # x-sweep: (rho, mx, my, mz, E, By, Bz); y-sweep: (rho, my, mx, mz, E, Bx, Bz)
-        x_index = {"rho": 0, "mx": 1, "my": 2, "mz": 3, "energy": 4, "bz": 6}
-        y_index = {"rho": 0, "mx": 2, "my": 1, "mz": 3, "energy": 4, "bz": 6}
-        for name in CONSERVED:
-
-            def fluxes(patch: Patch, name: str = name):
-                block = blocks[id(patch)]
-                (b0, b1), (c0, c1) = block.bounds
-                ox, oy = block.ci
-                fx = cache[id(patch)]["x"][x_index[name]]
-                fy = cache[id(patch)]["y"][y_index[name]]
-                return (
-                    fx[b0 - ox : b1 - ox + 1, c0 - oy : c1 - oy],
-                    fy[b0 - ox : b1 - ox, c0 - oy : c1 - oy + 1],
+    # Halos and boundaries ---------------------------------------------------#
+    def _fill_halos(self) -> None:
+        """Halos from the hierarchy, then the outflow faces of the domain."""
+        hierarchy = self.hierarchy
+        for name in self.names.values():
+            hierarchy.exchange_halos(name)
+        hierarchy.exchange_halos(self.potential)
+        for patch in hierarchy.local_patches:
+            shape = hierarchy.level_shape(patch.level)
+            for axis in range(2):
+                if self.periodic[axis]:
+                    continue
+                lower = patch.box[axis][0] == 0
+                upper = patch.box[axis][1] == shape[axis]
+                if not (lower or upper):
+                    continue
+                for name in self.names.values():
+                    _outflow_cells(
+                        patch.field(name).local_with_halos, axis, lower, upper
+                    )
+                _outflow_nodes(
+                    patch.field(self.potential).local_with_halos, axis, lower, upper
                 )
 
-            self._register.update(name, fluxes, dt, scale=0.5 * dt)
-        for patch in mesh.local_patches:
-            block = blocks[id(patch)]
-            ez = cache[id(patch)]["ez"]  # storage nodes 1 .. ncx - 1
-            (n0, n1), (m0, m1) = block.node_bounds
-            ox, oy = block.ci
-            values = ez[n0 - ox - 1 : n1 - ox - 1, m0 - oy - 1 : m1 - oy - 1]
-            patch.field(POTENTIAL).local[...] -= dt * values
+    # Primitive variables -----------------------------------------------------#
+    def _primitive(self, patch: Patch) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Primitive variables of a patch with its halo, and the face fields."""
+        dx, dy = self.hierarchy.spacing(patch.level)
+        cons = np.stack(
+            [patch.field(self.names[name]).local_with_halos for name in CONSERVED]
+        )
+        az = patch.field(self.potential).local_with_halos
+        bxf = (az[:, 1:] - az[:, :-1]) / dy + self.mean_field[0]
+        byf = -(az[1:, :] - az[:-1, :]) / dx + self.mean_field[1]
+        bx = 0.5 * (bxf[:-1] + bxf[1:])
+        by = 0.5 * (byf[:, :-1] + byf[:, 1:])
+        rho = cons[0]
+        u, v, w = cons[1] / rho, cons[2] / rho, cons[3] / rho
+        bz = cons[5]
+        p = (self.gamma - 1.0) * (
+            cons[4] - 0.5 * rho * (u**2 + v**2 + w**2) - 0.5 * (bx**2 + by**2 + bz**2)
+        )
+        prim = np.stack((rho, u, v, w, p, bx, by, bz))
+        return prim, bxf, byf
 
-    def _exchange(self) -> None:
-        mesh = self.hierarchy
-        mesh.restrict(POTENTIAL)
-        mesh.exchange_halos(POTENTIAL)
+    # The right-hand side -------------------------------------------------------#
+    def _reconstruct(self, q: np.ndarray, axis: int) -> tuple[np.ndarray, np.ndarray]:
+        """Left and right states at the faces along ``axis`` (array axis 1 + axis).
+
+        For ``n`` cells along the axis, the faces between cells ``k - 1`` and
+        ``k`` for ``k = 2 .. n - 2``.
+        """
+        limit = LIMITERS[self.limiter]
+        a = 1 + axis
+
+        def cut(start, stop):
+            index = [slice(None)] * q.ndim
+            index[a] = slice(start, stop)
+            return q[tuple(index)]
+
+        n = q.shape[a]
+        diff = np.diff(q, axis=a)  # diff k is q[k + 1] - q[k]
+        index = [slice(None)] * q.ndim
+        index[a] = slice(0, n - 3)
+        backward = diff[tuple(index)]
+        index[a] = slice(1, n - 2)
+        forward = diff[tuple(index)]
+        index[a] = slice(2, n - 1)
+        further = diff[tuple(index)]
+        slope_left = limit(backward, forward)  # cells 1 .. n - 3
+        slope_right = limit(forward, further)  # cells 2 .. n - 2
+        left = cut(1, n - 2) + 0.5 * slope_left
+        right = cut(2, n - 1) - 0.5 * slope_right
+        # first order where a reconstructed density or pressure is not positive
+        bad = (
+            (left[0] <= 0.0) | (left[4] <= 0.0) | (right[0] <= 0.0) | (right[4] <= 0.0)
+        )
+        if np.any(bad):
+            left = np.where(bad, cut(1, n - 2), left)
+            right = np.where(bad, cut(2, n - 1), right)
+        return left, right
+
+    def _current(self, bxf: np.ndarray, byf: np.ndarray, level: int) -> np.ndarray:
+        """``J_z`` at the inner nodes of a haloed block: node ``(I, J)`` at ``[I - 1, J - 1]``."""
+        dx, dy = self.hierarchy.spacing(level)
+        return (byf[1:, 1:-1] - byf[:-1, 1:-1]) / dx - (
+            bxf[1:-1, 1:] - bxf[1:-1, :-1]
+        ) / dy
+
+    def _resistive(self, prim, bxf, byf, patch: Patch) -> dict[str, Any]:
+        """The resistive parts of ``E_z`` at the block's nodes and of the face fluxes.
+
+        ``eta J_z`` at the nodes; the flux of ``B_z`` gains ``eta J_y`` along x and
+        ``-eta J_x`` along y (``B_z`` diffuses), the energy flux ``eta J x B``.
+        """
+        eta = self.resistivity
+        h = HALO
+        nx, ny = patch.shape
+        dx, dy = self.hierarchy.spacing(patch.level)
+        _, _, _, _, _, bx, by, bz = prim
+        jz = self._current(bxf, byf, patch.level)
+        # x-faces I = h .. h + nx between cells I - 1 and I, rows h .. h + ny - 1
+        right, left, rows = slice(h, h + nx + 1), slice(h - 1, h + nx), slice(h, h + ny)
+        jy = -(bz[right, rows] - bz[left, rows]) / dx
+        bz_x = 0.5 * (bz[right, rows] + bz[left, rows])
+        by_x = 0.5 * (by[right, rows] + by[left, rows])
+        jz_x = 0.5 * (
+            jz[h - 1 : h + nx, h - 1 : h + ny - 1] + jz[h - 1 : h + nx, h : h + ny]
+        )
+        # y-faces J = h .. h + ny between cells J - 1 and J, columns h .. h + nx - 1
+        upper, lower, cols = (
+            slice(h, h + ny + 1),
+            slice(h - 1, h + ny),
+            slice(h, h + nx),
+        )
+        jx = (bz[cols, upper] - bz[cols, lower]) / dy
+        bz_y = 0.5 * (bz[cols, upper] + bz[cols, lower])
+        bx_y = 0.5 * (bx[cols, upper] + bx[cols, lower])
+        jz_y = 0.5 * (
+            jz[h - 1 : h + nx - 1, h - 1 : h + ny] + jz[h : h + nx, h - 1 : h + ny]
+        )
+        return {
+            "ez": eta * jz[h - 1 : h + nx, h - 1 : h + ny],
+            "x": {"bz": eta * jy, "energy": eta * (jy * bz_x - jz_x * by_x)},
+            "y": {"bz": -eta * jx, "energy": eta * (jz_y * bx_y - jx * bz_y)},
+        }
+
+    def _patch_fluxes(self, patch: Patch) -> dict[str, Any]:
+        """The face fluxes of a patch's cells and the electric field at its nodes."""
+        prim, bxf, byf = self._primitive(patch)
+        if (
+            np.any(prim[0] <= 0.0)
+            or np.any(prim[4] <= 0.0)
+            or not np.all(np.isfinite(prim))
+        ):
+            raise FloatingPointError(
+                f"non-positive density or pressure on the level-{patch.level} patch "
+                f"{patch.box} at t = {self.time}"
+            )
+        nx, ny = patch.shape
+        h = HALO
+        gamma = self.gamma
+        rho, u, v, w, p, bx, by, bz = prim
+        # x-sweep: normal x, tangential (y, z)
+        qx = np.stack((rho, u, v, w, p, by, bz))
+        left, right = self._reconstruct(qx, 0)
+        fx = hlld_flux(left, right, bxf[2:-2, :], gamma)  # faces 2 .. X - 2, all rows
+        # y-sweep: normal y, tangential (x, z)
+        qy = np.stack((rho, v, u, w, p, bx, bz))
+        left, right = self._reconstruct(qy, 1)
+        fy = hlld_flux(
+            left, right, byf[:, 2:-2], gamma
+        )  # all columns, faces 2 .. Y - 2
+        # fx[k] at x-face k + 2 of the haloed block, i.e. block face k + 2 - h
+        ecc = bx * v - by * u
+        fx_by, gy_bx = fx[5], fy[5]  # x-flux of B_y = -E_z, y-flux of B_x = +E_z
+        fx_rho, gy_rho = fx[0], fy[0]
+        ez = _ct_contact(fx_by, gy_bx, fx_rho, gy_rho, ecc, nx, ny)
+        resistive = self._resistive(prim, bxf, byf, patch) if self.resistivity else None
+        if resistive is not None:
+            ez = ez + resistive["ez"]
+        sx = slice(h, h + ny)  # block rows (x-faces)
+        sy = slice(h, h + nx)  # block columns (y-faces)
+        xf = slice(0, nx + 1)  # block x-faces 0 .. nx: fx index k = face + h - 2
+        yf = slice(0, ny + 1)
+        flux_x = {
+            "density": fx[0, xf, sx],
+            "momentum_x": fx[1, xf, sx],
+            "momentum_y": fx[2, xf, sx],
+            "momentum_z": fx[3, xf, sx],
+            "energy": fx[4, xf, sx],
+            "bz": fx[6, xf, sx],
+        }
+        flux_y = {
+            "density": fy[0, sy, yf],
+            "momentum_x": fy[2, sy, yf],
+            "momentum_y": fy[1, sy, yf],
+            "momentum_z": fy[3, sy, yf],
+            "energy": fy[4, sy, yf],
+            "bz": fy[6, sy, yf],
+        }
+        if resistive is not None:
+            for name in ("bz", "energy"):
+                flux_x[name] = flux_x[name] + resistive["x"][name]
+                flux_y[name] = flux_y[name] + resistive["y"][name]
+        return {"x": flux_x, "y": flux_y, "ez": ez}
+
+    def _advance(self, dt: float, scale: float) -> None:
+        """One forward-Euler stage of every patch, recorded with ``scale``."""
+        hierarchy = self.hierarchy
+        self._fill_halos()
+        fluxes = {
+            id(patch): self._patch_fluxes(patch) for patch in hierarchy.local_patches
+        }
         for name in CONSERVED:
-            mesh.restrict(name)
-            mesh.exchange_halos(name)
+            self.register.update(
+                self.names[name],
+                lambda patch, name=name: (
+                    fluxes[id(patch)]["x"][name],
+                    fluxes[id(patch)]["y"][name],
+                ),
+                dt,
+                scale=scale,
+            )
+        for patch in hierarchy.local_patches:
+            patch.field(self.potential).local[...] -= dt * fluxes[id(patch)]["ez"]
+
+    # Time stepping -------------------------------------------------------------#
+    def stable_step(self) -> float:
+        """The largest stable step: ``cfl`` times the fast-wave crossing time of a cell.
+
+        With resistivity, also ``cfl`` times the explicit diffusion limit
+        ``1 / (2 eta (dx^-2 + dy^-2))`` of the finest cells.
+        """
+        self._check_ready()
+        hierarchy = self.hierarchy
+        smallest = np.inf
+        for patch in hierarchy.local_patches:
+            dx, dy = hierarchy.spacing(patch.level)
+            az = patch.field(self.potential).local
+            bx, by = self._cell_field(patch, az)
+            cons = [patch.field(self.names[name]).local for name in CONSERVED]
+            rho = cons[0]
+            u, v, w = cons[1] / rho, cons[2] / rho, cons[3] / rho
+            bz = cons[5]
+            p = (self.gamma - 1.0) * (
+                cons[4]
+                - 0.5 * rho * (u**2 + v**2 + w**2)
+                - 0.5 * (bx**2 + by**2 + bz**2)
+            )
+            cx = _fast_speed(rho, p, bx, by, bz, self.gamma)
+            cy = _fast_speed(rho, p, by, bx, bz, self.gamma)
+            rate = np.max((np.abs(u) + cx) / dx + (np.abs(v) + cy) / dy)
+            smallest = min(smallest, 1.0 / rate)
+            if self.resistivity:
+                smallest = min(smallest, 0.5 / (self.resistivity * (dx**-2 + dy**-2)))
+        from maybempi import MPI
+
+        return self.cfl * float(hierarchy.comm.allreduce(smallest, op=MPI.MIN))
 
     @profile("carafe.mhd_step", tags=_PROFILE_TAGS)
     def step(self, dt: float | None = None) -> float:
-        """Advance every level by one step of Heun's method; returns the step taken."""
+        """Advance by one step of Heun's method (SSP-RK2); return the step taken."""
+        self._check_ready()
         if dt is None:
             dt = self.stable_step()
-        mesh = self.hierarchy
-        names = (*CONSERVED, POTENTIAL)
+        hierarchy = self.hierarchy
+        names = [*self.names.values(), self.potential]
         start = {
             (id(patch), name): patch.field(name).local.copy()
-            for patch in mesh.local_patches
+            for patch in hierarchy.local_patches
             for name in names
         }
-        for _ in range(2):
-            self._stage(dt)
-            self._exchange()
-        for patch in mesh.local_patches:
+        self._advance(dt, 0.5 * dt)
+        hierarchy.restrict(self.potential)
+        self._advance(dt, 0.5 * dt)
+        for patch in hierarchy.local_patches:
             for name in names:
                 array = patch.field(name).local
-                array[...] = 0.5 * (start[(id(patch), name)] + array)
-        for name in CONSERVED:
-            self._register.reflux(name)
-        self._exchange()
+                array[...] = 0.5 * (array + start[(id(patch), name)])
+        for name in self.names.values():
+            self.register.reflux(name)
+        hierarchy.restrict(self.potential)
         self.time += dt
         self.steps += 1
         return dt
 
-    def run(
-        self, until: float, *, callback: Callable[[MHD2D], None] | None = None
-    ) -> None:
-        """Step until ``until``, the last step shortened to land on it."""
-        while self.time < until * (1 - 1e-12):
-            dt = min(self.stable_step(), until - self.time)
+    @profile("carafe.mhd_run", tags=_PROFILE_TAGS)
+    def run(self, duration: float, *, max_steps: int = 1_000_000) -> int:
+        """Advance by ``duration`` (the last step shortened to land on it); return the steps."""
+        self._check_ready()
+        if not np.isfinite(duration) or duration < 0.0:
+            raise ValueError("duration must be a finite, non-negative time")
+        end = self.time + duration
+        taken = 0
+        while self.time < end * (1.0 - 1e-14) and taken < max_steps:
+            dt = min(self.stable_step(), end - self.time)
             self.step(dt)
-            if callback is not None:
-                callback(self)
+            taken += 1
+        return taken
 
-    # -- refinement ----------------------------------------------------------------------
-
+    # Refinement ----------------------------------------------------------------#
     def current_tags(self, threshold: float, levels: int) -> dict[int, np.ndarray]:
         """Tag the cells where ``|J_z|`` times the cell size exceeds ``threshold``.
 
-        The change of the in-plane field across a cell; levels ``0 .. levels - 1`` are
-        tagged (so at most ``levels`` refined levels), from the patches this rank
-        holds. The result is for `regrid`.
+        That is the change of the in-plane field across a cell. Levels ``0 .. levels -
+        1`` that exist are tagged (so at most ``levels`` refined levels, one more per
+        regrid), from the patches this rank holds; the result is for `regrid`.
         """
-        mesh = self.hierarchy
+        self._check_ready()
+        hierarchy = self.hierarchy
+        self._fill_halos()
+        h = HALO
         tags = {
-            level: np.zeros(mesh.level_shape(level), dtype=bool)
-            for level in range(min(levels, mesh.max_level + 1))
+            level: np.zeros(hierarchy.level_shape(level), dtype=bool)
+            for level in range(min(levels, hierarchy.max_level + 1))
         }
-        for patch in mesh.local_patches:
+        for patch in hierarchy.local_patches:
             if patch.level not in tags:
                 continue
-            block = _Block(patch)
-            dx, dy = mesh.spacing(patch.level)
-            bxf, byf = self._face_field(block)
-            jz = (byf[1:, 1:-1] - byf[:-1, 1:-1]) / dx - (
-                bxf[1:-1, 1:] - bxf[1:-1, :-1]
-            ) / dy
-            # cell (k, l) of the storage has the nodes k, k + 1: jz nodes are 1 .. n - 1
-            cell = 0.25 * (
-                np.abs(jz[:-1, :-1])
-                + np.abs(jz[1:, :-1])
-                + np.abs(jz[:-1, 1:])
-                + np.abs(jz[1:, 1:])
+            nx, ny = patch.shape
+            dx, dy = hierarchy.spacing(patch.level)
+            _, bxf, byf = self._primitive(patch)
+            jz = np.abs(self._current(bxf, byf, patch.level))
+            # cell (C, R) has the nodes C, C + 1 and R, R + 1: jz index minus one
+            cell = 0.25 * sum(
+                jz[h - 1 + a : h - 1 + a + nx, h - 1 + b : h - 1 + b + ny]
+                for a in (0, 1)
+                for b in (0, 1)
             )
-            (b0, b1), (c0, c1) = block.bounds
-            ox, oy = block.ci
-            inside = cell[b0 - ox - 1 : b1 - ox - 1, c0 - oy - 1 : c1 - oy - 1]
-            tags[patch.level][b0:b1, c0:c1] |= inside * max(dx, dy) > threshold
+            (i0, i1), (j0, j1) = patch.box
+            tags[patch.level][i0:i1, j0:j1] |= cell * max(dx, dy) > threshold
         return tags
 
-    def regrid(self, tags: Mapping[int, Any], **options: Any) -> None:
-        """Regrid the hierarchy on ``tags`` (see `patchwork.AMRHierarchy.regrid`).
+    def regrid(self, tags: dict[int, Any], **options: Any) -> None:
+        """Regrid on ``tags`` (`patchwork.AMRHierarchy.regrid`, which takes ``options``).
 
-        The conserved fields keep their integrals, the potential is interpolated
-        (bilinear), so the field stays divergence-free; the flux register is rebuilt.
+        The conserved fields keep their integrals, ``A_z`` is interpolated (the field
+        stays divergence-free); the flux register is rebuilt for the new hierarchy.
         """
-        new = self.hierarchy.regrid(tags, **options)
-        self._use(new)
-        new.restrict(POTENTIAL)
-        self._exchange()
+        self._check_ready()
+        from patchwork import FluxRegister
 
-    # -- diagnostics ----------------------------------------------------------------------
+        hierarchy = self.hierarchy.regrid(tags, **options)
+        hierarchy.restrict(self.potential)
+        self.hierarchy = hierarchy
+        self.register = FluxRegister(hierarchy)
+
+    # Diagnostics ---------------------------------------------------------------#
+    def leaf_values(self) -> dict[str, np.ndarray]:
+        """The primitive variables on the leaf cells of the hierarchy (collective).
+
+        One value per leaf cell, in the order of `patchwork.CompositeCells`: ``x``,
+        ``y`` (the centres), ``level``, the variables of `dataset` and ``current_z``
+        (the mean of the corners).
+        """
+        self._check_ready()
+        from patchwork import CompositeCells
+
+        hierarchy = self.hierarchy
+        cells = CompositeCells(hierarchy)
+        h = HALO
+        names = (
+            "density",
+            "velocity_x",
+            "velocity_y",
+            "velocity_z",
+            "pressure",
+            "magnetic_field_x",
+            "magnetic_field_y",
+            "magnetic_field_z",
+            "current_z",
+        )
+        result = {name: np.empty(cells.num_cells) for name in names}
+        self._fill_halos()
+        for number, patch in enumerate(hierarchy.patches):
+            mine = cells.patch == number
+            values = None
+            if patch.is_local:
+                nx, ny = patch.shape
+                prim, bxf, byf = self._primitive(patch)
+                jz = self._current(bxf, byf, patch.level)
+                corner = 0.25 * sum(
+                    jz[h - 1 + a : h - 1 + a + nx, h - 1 + b : h - 1 + b + ny]
+                    for a in (0, 1)
+                    for b in (0, 1)
+                )
+                block = (slice(h, h + nx), slice(h, h + ny))
+                values = np.stack([*(q[block] for q in prim), corner])
+            # the patch's ranks hold it whole (split=None): share it from its first
+            values = hierarchy.comm.bcast(values, root=patch.ranks[0])
+            origin = np.array([lo for lo, _ in patch.box])
+            index = tuple((cells.index[mine] - origin).T)
+            for name, value in zip(names, values, strict=True):
+                result[name][mine] = value[index]
+        levels = np.array([patch.level for patch in hierarchy.patches])
+        return {
+            "x": cells.centers[:, 0],
+            "y": cells.centers[:, 1],
+            "level": levels[cells.patch],
+            **result,
+        }
+
+    # Diagnostics, per level ------------------------------------------------------#
+    def divergence(self) -> float:
+        """The largest ``|div B|`` times the cell size over the leaf cells of all patches.
+
+        The net flux out of each cell over its perimeter: zero to round-off by
+        construction, on each patch and (`composite_divergence`) across patches.
+        """
+        self._check_ready()
+        largest = 0.0
+        for patch in self.hierarchy.local_patches:
+            dx, dy = self.hierarchy.spacing(patch.level)
+            az = patch.field(self.potential).local
+            bxf = (az[:, 1:] - az[:, :-1]) / dy + self.mean_field[0]
+            byf = -(az[1:, :] - az[:-1, :]) / dx + self.mean_field[1]
+            div = (bxf[1:] - bxf[:-1]) / dx + (byf[:, 1:] - byf[:, :-1]) / dy
+            largest = max(largest, float(np.max(np.abs(div))) * min(dx, dy))
+        from maybempi import MPI
+
+        return float(self.hierarchy.comm.allreduce(largest, op=MPI.MAX))
+
+    def composite_divergence(self) -> float:
+        """The largest net magnetic flux out of a coarse leaf cell next to a finer patch.
+
+        The flux through a coarse face is the difference of ``A_z`` at its two
+        nodes; the fine faces over it add up to the difference at the same
+        nodes, which the fine patch shares (restricted). Returned relative to
+        the largest face flux: zero to round-off.
+        """
+        self._check_ready()
+        hierarchy = self.hierarchy
+        ratio = hierarchy.refinement_ratio
+        worst, scale = 0.0, 0.0
+        for fine in hierarchy.patches:
+            if fine.level == 0:
+                continue
+            coarse_patches = hierarchy.patches_at_level(fine.level - 1)
+            fine_az = hierarchy.gather(fine, self.potential)
+            scale = max(scale, float(np.max(np.abs(np.diff(fine_az, axis=0)))))
+            scale = max(scale, float(np.max(np.abs(np.diff(fine_az, axis=1)))))
+            for coarse in coarse_patches:
+                coarse_az = hierarchy.gather(coarse, self.potential)
+                # the coarse nodes on the fine patch's boundary
+                (fx0, fx1), (fy0, fy1) = fine.box
+                for i in range(fx0 // ratio, fx1 // ratio + 1):
+                    for j in range(fy0 // ratio, fy1 // ratio + 1):
+                        on_edge = i in (fx0 // ratio, fx1 // ratio) or j in (
+                            fy0 // ratio,
+                            fy1 // ratio,
+                        )
+                        ci, cj = i - coarse.box[0][0], j - coarse.box[1][0]
+                        if not on_edge or not (
+                            0 <= ci < coarse_az.shape[0]
+                            and 0 <= cj < coarse_az.shape[1]
+                        ):
+                            continue
+                        fi, fj = i * ratio - fx0, j * ratio - fy0
+                        worst = max(worst, abs(coarse_az[ci, cj] - fine_az[fi, fj]))
+        return worst / scale if scale else 0.0
 
     def totals(self) -> dict[str, float]:
-        """The integrals of the conserved fields over the domain (collective)."""
-        return {name: float(self.hierarchy.integral(name)) for name in CONSERVED}
+        """Integrals of the conserved fields over the domain, from the finest cells."""
+        self._check_ready()
+        return {name: self.hierarchy.integral(self.names[name]) for name in CONSERVED}
 
-    def leaf_values(self) -> dict[str, np.ndarray]:
-        """The primitive variables on the leaf cells (gathered on every rank).
+    def dataset(self, level: int = 0) -> xr.Dataset:
+        """The primitive variables of ``level`` as a dataset over its cell centres.
 
-        ``x``, ``y`` (cell centres), ``rho``, ``vx``, ``vy``,
-        ``vz``, ``p``, ``bx``, ``by``, ``bz`` and ``jz`` (the mean of the corners).
+        The patches of the level are gathered into one array of the level's
+        shape, NaN where the level has no patch. Collective.
         """
-        mesh = self.hierarchy
-        for name in ("bx_cell", "by_cell", "jz_cell", "p_cell"):
-            if name not in mesh.field_names:
-                mesh.allocate_field(name, halo=0)
-        for patch in mesh.local_patches:
-            block = _Block(patch)
-            prim = self._primitive(block)
-            dx, dy = mesh.spacing(patch.level)
-            bxf, byf = self._face_field(block)
-            jz = (byf[1:, 1:-1] - byf[:-1, 1:-1]) / dx - (
-                bxf[1:-1, 1:] - bxf[1:-1, :-1]
-            ) / dy
-            cell = 0.25 * (jz[:-1, :-1] + jz[1:, :-1] + jz[:-1, 1:] + jz[1:, 1:])
-            (b0, b1), (c0, c1) = block.bounds
-            ox, oy = block.ci
-            interior = self._interior(block, prim)
-            patch.field("bx_cell").local[...] = interior[5]
-            patch.field("by_cell").local[...] = interior[6]
-            patch.field("p_cell").local[...] = interior[4]
-            patch.field("jz_cell").local[...] = cell[
-                b0 - ox - 1 : b1 - ox - 1, c0 - oy - 1 : c1 - oy - 1
-            ]
-        cells = self._cells
-        get = cells.from_patches
-        centres = _leaf_centres(self)
-        rho = get("rho")
-        result = {
-            "x": centres[:, 0],
-            "y": centres[:, 1],
-            "rho": rho,
-            "vx": get("mx") / rho,
-            "vy": get("my") / rho,
-            "vz": get("mz") / rho,
-            "p": get("p_cell"),
-            "bx": get("bx_cell"),
-            "by": get("by_cell"),
-            "bz": get("bz"),
-            "jz": get("jz_cell"),
+        self._check_ready()
+        hierarchy = self.hierarchy
+        nx, ny = hierarchy.level_shape(level)
+        dx, dy = hierarchy.spacing(level)
+        x = hierarchy.lower_bound[0] + (np.arange(nx) + 0.5) * dx
+        y = hierarchy.lower_bound[1] + (np.arange(ny) + 0.5) * dy
+        fields = {name: np.full((nx, ny), np.nan) for name in (*CONSERVED, "bx", "by")}
+        for patch in hierarchy.patches_at_level(level):
+            (i0, i1), (j0, j1) = patch.box
+            for name in CONSERVED:
+                fields[name][i0:i1, j0:j1] = hierarchy.gather(patch, self.names[name])
+            az = hierarchy.gather(patch, self.potential)
+            bx, by = self._cell_field(patch, az)
+            fields["bx"][i0:i1, j0:j1] = bx
+            fields["by"][i0:i1, j0:j1] = by
+        rho = fields["density"]
+        u = fields["momentum_x"] / rho
+        v = fields["momentum_y"] / rho
+        w = fields["momentum_z"] / rho
+        b2 = fields["bx"] ** 2 + fields["by"] ** 2 + fields["bz"] ** 2
+        p = (self.gamma - 1.0) * (
+            fields["energy"] - 0.5 * rho * (u**2 + v**2 + w**2) - 0.5 * b2
+        )
+        dims = ("x", "y")
+        data = {
+            "density": variable(dims, rho, r"$\rho$"),
+            "velocity_x": variable(dims, u, r"$u_x$"),
+            "velocity_y": variable(dims, v, r"$u_y$"),
+            "velocity_z": variable(dims, w, r"$u_z$"),
+            "pressure": variable(dims, p, r"$p$"),
+            "magnetic_field_x": variable(dims, fields["bx"], r"$B_x$"),
+            "magnetic_field_y": variable(dims, fields["by"], r"$B_y$"),
+            "magnetic_field_z": variable(dims, fields["bz"], r"$B_z$"),
+            "magnetic_pressure": variable(dims, 0.5 * b2, r"$|\mathbf{B}|^2/2$"),
         }
-        return result
-
-
-# -- the convergence problem of the method card ----------------------------------------------
-
-
-def alfven_wave(
-    n: int, *, levels: int = 0, limiter: str = "none", cfl: float = 0.4
-) -> tuple[MHD2D, Callable[[np.ndarray, float], np.ndarray]]:
-    """A circularly polarised Alfvén wave along ``x`` (Tóth 2000) on an ``n x 4`` box.
-
-    ``levels``: refined patches over the middle of the box. Returns the model and the
-    exact ``B_y(x, t)``; the wave travels at ``v_A = 1`` and returns after ``t = 1``.
-    """
-    from patchwork import AMRHierarchy
-
-    mesh = AMRHierarchy(
-        (n, 4), bounds=((0.0, 1.0), (0.0, 4.0 / n)), periodic=(True, True)
-    )
-    for level in range(1, levels + 1):
-        r = 2**level
-        mesh.add_patch(level, ((n * r // 4, 3 * n * r // 4), (0, 4 * r)))
-    model = MHD2D(
-        mesh, gamma=5.0 / 3.0, mean_field=(1.0, 0.0), limiter=limiter, cfl=cfl
-    )
-    amp = 0.1
-    k = 2.0 * np.pi
-
-    def by_exact(x, t):
-        return amp * np.sin(k * (x - t))
-
-    model.set_state(
-        density=1.0,
-        velocity=(
-            0.0,
-            lambda x, y: -amp * np.sin(k * x),
-            lambda x, y: -amp * np.cos(k * x),
-        ),
-        pressure=0.1,
-        potential=lambda x, y: amp * np.cos(k * x) / k,
-        bz=lambda x, y: amp * np.cos(k * x),
-    )
-    return model, by_exact
-
-
-def _alfven_problem() -> ConvergenceProblem:
-    def error(h: float) -> float:
-        model, exact = alfven_wave(round(1.0 / h))
-        model.run(0.5)
-        leaf = model.leaf_values()
-        return float(np.mean(np.abs(leaf["by"] - exact(leaf["x"], 0.5))))
-
-    return ConvergenceProblem(error, steps=[1 / 16, 1 / 32, 1 / 64])
-
-
-def _leaf_centres(model: MHD2D) -> np.ndarray:
-    """The centres of the leaf cells, in the order of `patchwork.CompositeCells`."""
-    cells = model._cells
-    mesh = model.hierarchy
-    levels = np.array([p.level for p in mesh.patches])[cells.patch]
-    lower = np.array(mesh.lower_bound)
-    centres = np.empty((cells.num_cells, 2))
-    for level in np.unique(levels):
-        chosen = levels == level
-        h = np.array(mesh.spacing(int(level)))
-        centres[chosen] = lower + (cells.index[chosen] + 0.5) * h
-    return centres
+        coords = {
+            "x": variable("x", x, r"$x$"),
+            "y": variable("y", y, r"$y$"),
+        }
+        return xr.Dataset(
+            data,
+            coords=coords,
+            attrs={"time": self.time, "level": level, "gamma": self.gamma},
+        )
