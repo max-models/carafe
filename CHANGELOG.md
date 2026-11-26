@@ -30,6 +30,11 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   density with `MHD2D.current_tags`). Explicit resistivity with Ohmic heating in the energy.
   Second order on the circularly polarised Alfven wave, also across a refined patch; on any
   number of ranks the results of one rank to round-off.
+- `harris_sheets` and `sheet_diagnostics` (`carafe.mhd`): two Harris sheets in a periodic
+  box (a seed mode and optional noise), the reconnected flux and the O- and X-points of a
+  sheet. `examples/plasmoid_reconnection.py` runs them on regridded patches and on the
+  uniform mesh of the finest level and compares the flux, the cells and the cost per step
+  (`--production`: S = 4e4 and three levels, for plasmoid chains).
 
 - `GasCoupledDriftFluid` (`carafe.gas_coupling`): `DriftFluid2D` with its neutral gas from
   `GasDynamics` instead of the fixed `refill_rate`, split on windows: the plasma's window-averaged
