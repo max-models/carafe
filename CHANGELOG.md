@@ -22,6 +22,11 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `MHD2D`: Braginskii heat conduction (`conduction=(kappa_par, kappa_perp)`, along and
+  across the field, with the Sharma–Hammett limited transverse gradient), uniform gravity
+  (`gravity=`), perfectly conducting walls (`boundaries={"y": "wall"}`) and the
+  Rayleigh–Taylor case `MHD2D.rayleigh_taylor`; the tutorial "MHD on patches" shows them.
+- `carafe.limiters`: the slope limiters shared by `GasDynamics` and `MHD2D`.
 - `MHD2D` (`carafe.mhd`): resistivity (`resistivity=`: `eta J` in the electric field, the
   diffusion of `B_z`, `eta J x B` in the energy flux, the explicit diffusion limit in
   `stable_step`), regridding on the current density (`current_tags`, `regrid`: the
