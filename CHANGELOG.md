@@ -22,6 +22,13 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `MHD2D` (`carafe.mhd`): resistivity (`resistivity=`: `eta J` in the electric field, the
+  diffusion of `B_z`, `eta J x B` in the energy flux, the explicit diffusion limit in
+  `stable_step`), regridding on the current density (`current_tags`, `regrid`: the
+  integrals kept, `A_z` interpolated so div B stays zero on the composite mesh) and
+  `leaf_values` (the primitive variables and `J_z` on the leaf cells). Tests on refined and
+  regridded patches, resistive decay, and under mpirun the results of one rank.
+
 - `GasCoupledDriftFluid` (`carafe.gas_coupling`): `DriftFluid2D` with its neutral gas from
   `GasDynamics` instead of the fixed `refill_rate`, split on windows: the plasma's window-averaged
   ionization is the gas model's argon sink, the ions reaching the target return as argon from the

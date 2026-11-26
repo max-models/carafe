@@ -1,4 +1,4 @@
-r"""Ideal MHD in two dimensions on a patchwork hierarchy.
+r"""Ideal and resistive MHD in two dimensions on a patchwork hierarchy.
 
 `MHD2D` solves the equations of ideal magnetohydrodynamics in a plane ``(x, y)``
 with all three components of the velocity and the magnetic field (2.5D), in
@@ -16,13 +16,17 @@ Heaviside–Lorentz units with :math:`\mu_0 = 1` (the field in units of
     \partial_t\mathbf B = \nabla\times(\mathbf u\times\mathbf B),
 
 with :math:`p_T = p + |\mathbf B|^2/2` and
-:math:`E = p/(\gamma - 1) + \rho|\mathbf u|^2/2 + |\mathbf B|^2/2`.
+:math:`E = p/(\gamma - 1) + \rho|\mathbf u|^2/2 + |\mathbf B|^2/2`. With a uniform
+resistivity :math:`\eta` (a magnetic diffusivity in these units) the electric field
+gains :math:`\eta\mathbf J`, :math:`\mathbf J = \nabla\times\mathbf B`, and the energy flux
+:math:`\eta\,\mathbf J\times\mathbf B` (the Ohmic heating stays in the energy); the
+Lundquist number of a layer of length :math:`L` is :math:`S = L v_A/\eta`.
 
 **The mesh is patchwork's.** The model owns no grid: it allocates its fields on
 an `patchwork.AMRHierarchy` and uses the hierarchy's halo exchange, flux register
 and restriction. A uniform grid is a hierarchy of one level; refined patches
-are fixed patches of finer levels (all levels take the same time step; no
-regridding yet).
+are patches of finer levels, fixed or regridded on the current density
+(`MHD2D.current_tags`, `MHD2D.regrid`); all levels take the same time step.
 
 **The magnetic field.** The density, the momentum, the energy and :math:`B_z`
 are cell-centered conserved fields. The in-plane field is the curl of a vector
@@ -50,7 +54,9 @@ face-normal field taken from :math:`A_z`, the electric field at the nodes by the
 upwind "CT-contact" average of the face fluxes (Gardiner and Stone 2005), Heun's
 method (SSP-RK2), and refluxing (`patchwork.FluxRegister`) at coarse–fine faces.
 Where a reconstructed density or pressure is not positive the face falls back to
-first order.
+first order. The resistive terms are explicit (``J_z`` at the nodes from the face fields,
+``J_x``, ``J_y`` at the faces from ``B_z``), and the step keeps within the diffusion
+limit of the finest cells.
 
 **Boundaries.** Periodic axes are those the hierarchy declares periodic; the faces
 of the other axes are outflow (zero-gradient) boundaries.
@@ -58,9 +64,14 @@ of the other axes are outflow (zero-gradient) boundaries.
 patchwork is an optional dependency of carafe (the ``spatial`` extra): install it to
 use this module.
 
-**Not yet.** Resistivity, anisotropic conduction, gravity, walls, the r–z metric
-and graded axes; MPI is parallel over patches (the fields of a patch are not split
-between ranks).
+**Regridding.** `MHD2D.regrid` moves the conserved fields (their integrals kept) and
+interpolates :math:`A_z` bilinearly onto new patches, so the field stays
+divergence-free; a state can be set again on the new patches (`set_state`), e.g. to
+resolve an initial current sheet the base level cannot.
+
+**Not yet.** Anisotropic conduction, viscosity, gravity, walls, the r–z metric and
+graded axes; MPI is parallel over patches (the fields of a patch are not split between
+ranks): place the patches with ``placement="morton"`` or ``"balanced"``.
 """
 
 from __future__ import annotations
@@ -80,7 +91,7 @@ from carafe.limiters import LIMITERS
 if TYPE_CHECKING:
     from patchwork import AMRHierarchy, Patch
 
-__all__ = ["MHD2D", "hlld_flux"]
+__all__ = ["CONSERVED", "MHD2D", "hlld_flux"]
 
 #: Halo width of every field: two cells for the MUSCL stencil of a face.
 HALO = 2
@@ -328,15 +339,16 @@ def _outflow_nodes(array: np.ndarray, axis: int, lower: bool, upper: bool) -> No
         "mass": r"\partial_t\rho + \nabla\cdot(\rho\mathbf u) = 0",
         "momentum": r"\partial_t(\rho\mathbf u) + \nabla\cdot\big(\rho\mathbf u\mathbf u + p_T\mathbf I - \mathbf B\mathbf B\big) = 0, \qquad p_T = p + \tfrac12|\mathbf B|^2",
         "energy": r"\partial_t E + \nabla\cdot\big((E + p_T)\mathbf u - (\mathbf u\cdot\mathbf B)\mathbf B\big) = 0, \qquad E = \frac{p}{\gamma - 1} + \tfrac12\rho|\mathbf u|^2 + \tfrac12|\mathbf B|^2",
-        "field": r"B_x = B_{0x} + \partial_y A_z, \quad B_y = B_{0y} - \partial_x A_z, \quad \partial_t A_z = -E_z = u_x B_y - u_y B_x, \quad \partial_t B_z + \nabla\cdot(B_z\mathbf u - u_z\mathbf B) = 0",
+        "field": r"B_x = B_{0x} + \partial_y A_z, \quad B_y = B_{0y} - \partial_x A_z, \quad \partial_t A_z = -E_z = u_x B_y - u_y B_x - \eta J_z, \quad \partial_t B_z + \nabla\cdot(B_z\mathbf u - u_z\mathbf B) = \eta\nabla^2 B_z",
+        "resistive": r"\mathbf E \mathrel{+}= \eta\mathbf J, \quad \mathbf J = \nabla\times\mathbf B, \quad \text{energy flux} \mathrel{+}= \eta\,\mathbf J\times\mathbf B",
         "ct_contact": r"E_z = \tfrac14\big(\textstyle\sum_\text{faces} E_z^f\big) + \tfrac14\big(\textstyle\sum_\text{4 half-faces} (E_z^f - E_z^c)_\text{upwind}\big)",
     },
     order=2,
     assumptions=(
-        r"ideal MHD in the plane with three velocity and field components; Heaviside–Lorentz units ($\mu_0 = 1$)",
+        r"MHD in the plane with three velocity and field components; Heaviside–Lorentz units ($\mu_0 = 1$); uniform resistivity $\eta$, explicit",
         r"in-plane field from a nodal $A_z$: zero discrete divergence per cell and on the composite mesh, to round-off",
         r"MUSCL on the primitives, HLLD, CT-contact electric field, Heun (SSP-RK2) at CFL 0.4; refluxing at coarse–fine faces",
-        r"Cartesian, uniform levels, one time step for all levels; periodic or outflow faces",
+        r"Cartesian, uniform levels, one time step for all levels; periodic or outflow faces; regridding interpolates $A_z$ bilinearly",
         r"the order is that of a smooth Alfvén wave with the unlimited reconstruction",
     ),
     references=(
@@ -355,6 +367,8 @@ class MHD2D:
         gamma: The adiabatic index.
         mean_field: The uniform in-plane field ``(B0x, B0y)`` added to the curl of
             ``A_z``.
+        resistivity: The uniform resistivity ``eta`` (a magnetic diffusivity); 0 for
+            ideal MHD.
         limiter: The slope limiter of the reconstruction (`carafe.limiters`):
             ``"minmod"``, ``"vanleer"`` (default), ``"mc"`` or ``"none"``.
         cfl: The Courant number.
@@ -368,6 +382,7 @@ class MHD2D:
         *,
         gamma: float = 5.0 / 3.0,
         mean_field: tuple[float, float] = (0.0, 0.0),
+        resistivity: float = 0.0,
         limiter: str = "vanleer",
         cfl: float = 0.4,
         prefix: str = "mhd_",
@@ -385,9 +400,12 @@ class MHD2D:
             raise ValueError("cfl must be in (0, 1]")
         if gamma <= 1.0:
             raise ValueError("gamma must be larger than 1")
+        if not resistivity >= 0.0:
+            raise ValueError("resistivity must be non-negative")
         self.hierarchy = hierarchy
         self.gamma = float(gamma)
         self.mean_field = (float(mean_field[0]), float(mean_field[1]))
+        self.resistivity = float(resistivity)
         self.limiter = limiter
         self.cfl = float(cfl)
         self.names = {name: prefix + name for name in CONSERVED}
@@ -643,6 +661,51 @@ class MHD2D:
             right = np.where(bad, cut(2, n - 1), right)
         return left, right
 
+    def _current(self, bxf: np.ndarray, byf: np.ndarray, level: int) -> np.ndarray:
+        """``J_z`` at the inner nodes of a haloed block: node ``(I, J)`` at ``[I - 1, J - 1]``."""
+        dx, dy = self.hierarchy.spacing(level)
+        return (byf[1:, 1:-1] - byf[:-1, 1:-1]) / dx - (
+            bxf[1:-1, 1:] - bxf[1:-1, :-1]
+        ) / dy
+
+    def _resistive(self, prim, bxf, byf, patch: Patch) -> dict[str, Any]:
+        """The resistive parts of ``E_z`` at the block's nodes and of the face fluxes.
+
+        ``eta J_z`` at the nodes; the flux of ``B_z`` gains ``eta J_y`` along x and
+        ``-eta J_x`` along y (``B_z`` diffuses), the energy flux ``eta J x B``.
+        """
+        eta = self.resistivity
+        h = HALO
+        nx, ny = patch.shape
+        dx, dy = self.hierarchy.spacing(patch.level)
+        _, _, _, _, _, bx, by, bz = prim
+        jz = self._current(bxf, byf, patch.level)
+        # x-faces I = h .. h + nx between cells I - 1 and I, rows h .. h + ny - 1
+        right, left, rows = slice(h, h + nx + 1), slice(h - 1, h + nx), slice(h, h + ny)
+        jy = -(bz[right, rows] - bz[left, rows]) / dx
+        bz_x = 0.5 * (bz[right, rows] + bz[left, rows])
+        by_x = 0.5 * (by[right, rows] + by[left, rows])
+        jz_x = 0.5 * (
+            jz[h - 1 : h + nx, h - 1 : h + ny - 1] + jz[h - 1 : h + nx, h : h + ny]
+        )
+        # y-faces J = h .. h + ny between cells J - 1 and J, columns h .. h + nx - 1
+        upper, lower, cols = (
+            slice(h, h + ny + 1),
+            slice(h - 1, h + ny),
+            slice(h, h + nx),
+        )
+        jx = (bz[cols, upper] - bz[cols, lower]) / dy
+        bz_y = 0.5 * (bz[cols, upper] + bz[cols, lower])
+        bx_y = 0.5 * (bx[cols, upper] + bx[cols, lower])
+        jz_y = 0.5 * (
+            jz[h - 1 : h + nx - 1, h - 1 : h + ny] + jz[h : h + nx, h - 1 : h + ny]
+        )
+        return {
+            "ez": eta * jz[h - 1 : h + nx, h - 1 : h + ny],
+            "x": {"bz": eta * jy, "energy": eta * (jy * bz_x - jz_x * by_x)},
+            "y": {"bz": -eta * jx, "energy": eta * (jz_y * bx_y - jx * bz_y)},
+        }
+
     def _patch_fluxes(self, patch: Patch) -> dict[str, Any]:
         """The face fluxes of a patch's cells and the electric field at its nodes."""
         prim, bxf, byf = self._primitive(patch)
@@ -674,6 +737,9 @@ class MHD2D:
         fx_by, gy_bx = fx[5], fy[5]  # x-flux of B_y = -E_z, y-flux of B_x = +E_z
         fx_rho, gy_rho = fx[0], fy[0]
         ez = _ct_contact(fx_by, gy_bx, fx_rho, gy_rho, ecc, nx, ny)
+        resistive = self._resistive(prim, bxf, byf, patch) if self.resistivity else None
+        if resistive is not None:
+            ez = ez + resistive["ez"]
         sx = slice(h, h + ny)  # block rows (x-faces)
         sy = slice(h, h + nx)  # block columns (y-faces)
         xf = slice(0, nx + 1)  # block x-faces 0 .. nx: fx index k = face + h - 2
@@ -694,6 +760,10 @@ class MHD2D:
             "energy": fy[4, sy, yf],
             "bz": fy[6, sy, yf],
         }
+        if resistive is not None:
+            for name in ("bz", "energy"):
+                flux_x[name] = flux_x[name] + resistive["x"][name]
+                flux_y[name] = flux_y[name] + resistive["y"][name]
         return {"x": flux_x, "y": flux_y, "ez": ez}
 
     def _advance(self, dt: float, scale: float) -> None:
@@ -718,7 +788,11 @@ class MHD2D:
 
     # Time stepping -------------------------------------------------------------#
     def stable_step(self) -> float:
-        """The largest stable step: ``cfl`` times the fast-wave crossing time of a cell."""
+        """The largest stable step: ``cfl`` times the fast-wave crossing time of a cell.
+
+        With resistivity, also ``cfl`` times the explicit diffusion limit
+        ``1 / (2 eta (dx^-2 + dy^-2))`` of the finest cells.
+        """
         self._check_ready()
         hierarchy = self.hierarchy
         smallest = np.inf
@@ -739,6 +813,8 @@ class MHD2D:
             cy = _fast_speed(rho, p, by, bx, bz, self.gamma)
             rate = np.max((np.abs(u) + cx) / dx + (np.abs(v) + cy) / dy)
             smallest = min(smallest, 1.0 / rate)
+            if self.resistivity:
+                smallest = min(smallest, 0.5 / (self.resistivity * (dx**-2 + dy**-2)))
         from maybempi import MPI
 
         return self.cfl * float(hierarchy.comm.allreduce(smallest, op=MPI.MIN))
@@ -784,7 +860,109 @@ class MHD2D:
             taken += 1
         return taken
 
+    # Refinement ----------------------------------------------------------------#
+    def current_tags(self, threshold: float, levels: int) -> dict[int, np.ndarray]:
+        """Tag the cells where ``|J_z|`` times the cell size exceeds ``threshold``.
+
+        That is the change of the in-plane field across a cell. Levels ``0 .. levels -
+        1`` that exist are tagged (so at most ``levels`` refined levels, one more per
+        regrid), from the patches this rank holds; the result is for `regrid`.
+        """
+        self._check_ready()
+        hierarchy = self.hierarchy
+        self._fill_halos()
+        h = HALO
+        tags = {
+            level: np.zeros(hierarchy.level_shape(level), dtype=bool)
+            for level in range(min(levels, hierarchy.max_level + 1))
+        }
+        for patch in hierarchy.local_patches:
+            if patch.level not in tags:
+                continue
+            nx, ny = patch.shape
+            dx, dy = hierarchy.spacing(patch.level)
+            _, bxf, byf = self._primitive(patch)
+            jz = np.abs(self._current(bxf, byf, patch.level))
+            # cell (C, R) has the nodes C, C + 1 and R, R + 1: jz index minus one
+            cell = 0.25 * sum(
+                jz[h - 1 + a : h - 1 + a + nx, h - 1 + b : h - 1 + b + ny]
+                for a in (0, 1)
+                for b in (0, 1)
+            )
+            (i0, i1), (j0, j1) = patch.box
+            tags[patch.level][i0:i1, j0:j1] |= cell * max(dx, dy) > threshold
+        return tags
+
+    def regrid(self, tags: dict[int, Any], **options: Any) -> None:
+        """Regrid on ``tags`` (`patchwork.AMRHierarchy.regrid`, which takes ``options``).
+
+        The conserved fields keep their integrals, ``A_z`` is interpolated (the field
+        stays divergence-free); the flux register is rebuilt for the new hierarchy.
+        """
+        self._check_ready()
+        from patchwork import FluxRegister
+
+        hierarchy = self.hierarchy.regrid(tags, **options)
+        hierarchy.restrict(self.potential)
+        self.hierarchy = hierarchy
+        self.register = FluxRegister(hierarchy)
+
     # Diagnostics ---------------------------------------------------------------#
+    def leaf_values(self) -> dict[str, np.ndarray]:
+        """The primitive variables on the leaf cells of the hierarchy (collective).
+
+        One value per leaf cell, in the order of `patchwork.CompositeCells`: ``x``,
+        ``y`` (the centres), ``level``, the variables of `dataset` and ``current_z``
+        (the mean of the corners).
+        """
+        self._check_ready()
+        from patchwork import CompositeCells
+
+        hierarchy = self.hierarchy
+        cells = CompositeCells(hierarchy)
+        h = HALO
+        names = (
+            "density",
+            "velocity_x",
+            "velocity_y",
+            "velocity_z",
+            "pressure",
+            "magnetic_field_x",
+            "magnetic_field_y",
+            "magnetic_field_z",
+            "current_z",
+        )
+        result = {name: np.empty(cells.num_cells) for name in names}
+        self._fill_halos()
+        for number, patch in enumerate(hierarchy.patches):
+            mine = cells.patch == number
+            values = None
+            if patch.is_local:
+                nx, ny = patch.shape
+                prim, bxf, byf = self._primitive(patch)
+                jz = self._current(bxf, byf, patch.level)
+                corner = 0.25 * sum(
+                    jz[h - 1 + a : h - 1 + a + nx, h - 1 + b : h - 1 + b + ny]
+                    for a in (0, 1)
+                    for b in (0, 1)
+                )
+                block = (slice(h, h + nx), slice(h, h + ny))
+                values = np.stack([*(q[block] for q in prim), corner])
+            # the patch's ranks hold it whole (split=None): share it from its first
+            values = hierarchy.comm.bcast(values, root=patch.ranks[0])
+            origin = np.array([lo for lo, _ in patch.box])
+            index = tuple((cells.index[mine] - origin).T)
+            for name, value in zip(names, values, strict=True):
+                result[name][mine] = value[index]
+        levels = np.array([patch.level for patch in hierarchy.patches])
+        return {
+            "x": cells.centers[:, 0],
+            "y": cells.centers[:, 1],
+            "level": levels[cells.patch],
+            **result,
+        }
+
+    # Diagnostics, per level ------------------------------------------------------#
     def divergence(self) -> float:
         """The largest ``|div B|`` times the cell size over the leaf cells of all patches.
 
