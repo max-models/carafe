@@ -613,6 +613,67 @@ class MHD2D:
         return model
 
     @classmethod
+    def rotor(cls, cells: int, **options: Any) -> MHD2D:
+        """The MHD rotor (Balsara and Spicer 1999) on the unit square, ``cells`` per side.
+
+        A dense disc (density 10, radius 0.1, tapered to 1 at radius 0.115) spins at
+        speed 2 at its edge in gas of density 1, pressure 1, in a uniform field
+        ``5 / sqrt(4 pi)`` along ``x``; ``gamma = 1.4``, outflow faces. Torsional
+        Alfvén waves carry its angular momentum away and squeeze it into an oval;
+        the reference time is 0.15.
+        """
+        from patchwork import AMRHierarchy
+
+        hierarchy = AMRHierarchy((cells, cells), ((0.0, 1.0), (0.0, 1.0)))
+        options = {"gamma": 1.4, **options}
+        model = cls(hierarchy, mean_field=(5.0 / np.sqrt(4.0 * np.pi), 0.0), **options)
+        r0, r1, speed = 0.1, 0.115, 2.0
+
+        def taper(x, y):
+            r = np.hypot(x - 0.5, y - 0.5)
+            return r, np.clip((r1 - r) / (r1 - r0), 0.0, 1.0)
+
+        def density(x, y):
+            r, f = taper(x, y)
+            return np.where(r <= r0, 10.0, 1.0 + 9.0 * f)
+
+        def velocity(x, y):
+            r, f = taper(x, y)
+            omega = np.where(r <= r0, speed / r0, f * speed / np.maximum(r, r0))
+            return (-omega * (y - 0.5), omega * (x - 0.5), 0.0 * x)
+
+        model.set_state(density, velocity, 1.0)
+        return model
+
+    @classmethod
+    def blast_wave(cls, cells: int, **options: Any) -> MHD2D:
+        """The magnetized blast wave, ``cells x 1.5 cells`` cells (Gardiner and Stone 2005).
+
+        Pressure 10 inside radius 0.1 and 0.1 outside, density 1, in a periodic box
+        ``[-0.5, 0.5] x [-0.75, 0.75]`` with a uniform field of 1 at 45 degrees;
+        ``gamma = 5/3``. The low plasma beta outside (0.2) makes the blast expand
+        along the field; the reference time is 0.2. The limiter is ``"minmod"`` by
+        default: with van Leer slopes at CFL 0.4 the pressure, the small difference of
+        the total energy and the magnetic energy there, turns negative early on.
+        """
+        from patchwork import AMRHierarchy
+
+        hierarchy = AMRHierarchy(
+            (cells, (3 * cells) // 2),
+            ((-0.5, 0.5), (-0.75, 0.75)),
+            periodic=(True, True),
+        )
+        field = 1.0 / np.sqrt(2.0)
+        options = {"limiter": "minmod", **options}
+        model = cls(hierarchy, mean_field=(field, field), **options)
+        model.set_state(
+            1.0,
+            (0.0, 0.0, 0.0),
+            lambda x, y: np.where(np.hypot(x, y) < 0.1, 10.0, 0.1),
+        )
+        return model
+
+    @classmethod
     def rayleigh_taylor(
         cls,
         cells: int,

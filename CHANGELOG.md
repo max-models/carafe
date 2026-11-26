@@ -22,6 +22,9 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `MHD2D.rotor` and `MHD2D.blast_wave`, and the tutorial "MHD test problems" (the rotor, the
+  blast wave, the energy budget of the Orszag–Tang vortex): the benchmarks of mhd-sandbox,
+  whose solver `MHD2D` replaces.
 - `MHD2D`: Braginskii heat conduction (`conduction=(kappa_par, kappa_perp)`, along and
   across the field, with the Sharma–Hammett limited transverse gradient), uniform gravity
   (`gravity=`), perfectly conducting walls (`boundaries={"y": "wall"}`) and the

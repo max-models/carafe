@@ -373,3 +373,33 @@ def test_rejects_bad_boundaries_and_coefficients():
         MHD2D(AMRHierarchy((4, 4)), boundaries={"y": "wall"}, mean_field=(0.0, 1.0))
     with pytest.raises(ValueError, match="non-negative"):
         MHD2D(AMRHierarchy((4, 4)), conduction=(-1.0, 0.0))
+
+
+# The test problems of mhd-sandbox ----------------------------------------------------#
+def test_rotor_keeps_its_point_symmetry_and_div_b_zero():
+    model = MHD2D.rotor(32)
+    model.run(0.05)
+    data = model.dataset()
+    density = data.density.values
+    np.testing.assert_allclose(density, density[::-1, ::-1], rtol=1e-10)
+    assert float(data.pressure.min()) > 0.0
+    assert model.divergence() < 1e-14
+
+
+def test_blast_wave_conserves_and_runs_along_the_field():
+    model = MHD2D.blast_wave(32)
+    before = model.totals()
+    model.run(0.1)
+    after = model.totals()
+    for name in before:
+        assert abs(after[name] - before[name]) < 1e-12
+    data = model.dataset()
+    pressure = data.pressure.values
+    np.testing.assert_allclose(pressure, pressure[::-1, ::-1], rtol=1e-10)
+    # along the field (the diagonal x = y) the blast reaches further than across it
+    x, y = np.meshgrid(data.x.values, data.y.values, indexing="ij")
+    hot = pressure > 1.0  # the hot core
+    along = np.abs(x + y)[hot].max()
+    across = np.abs(x - y)[hot].max()
+    assert along > 1.5 * across
+    assert model.divergence() < 1e-14
