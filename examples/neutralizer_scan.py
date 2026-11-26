@@ -13,7 +13,7 @@ Magnetic cusps on the side walls confine the plasma: it is far denser, but its
 ionization degree stays below a per cent, too little for stripping on the plasma
 to raise the neutral fraction much over that of the gas alone. The cross sections
 and rates are illustrative placeholders, not data (see
-``wellbalanced.neutralizer.illustrative_deuterium_neutralizer``): the curves show
+``carafe.neutralizer.illustrative_deuterium_neutralizer``): the curves show
 what the model computes, not what a neutralizer achieves. Every scan is one
 xarray dataset, plotted with plasma-plots.
 """
@@ -24,8 +24,8 @@ import numpy as np
 import plasma_plots
 import xarray as xr
 
-from wellbalanced import stack
-from wellbalanced.neutralizer import illustrative_deuterium_neutralizer
+from carafe import stack
+from carafe.neutralizer import illustrative_deuterium_neutralizer
 
 warnings.simplefilter("ignore", UserWarning)  # the placeholder data warn
 flows = np.geomspace(1.0e21, 2.0e22, 9)  # molecules/s

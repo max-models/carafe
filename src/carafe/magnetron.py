@@ -1,0 +1,1202 @@
+"""A global model of the ionization region of a (HiPIMS) magnetron discharge.
+
+The model balances, averaged over the volume ``V`` of the ionization region in
+front of the racetrack of a sputtering magnetron, five species: electrons,
+argon ``Ar`` and ``Ar+``, and the sputtered target metal ``M`` and ``M+``. It is
+a `carafe.GlobalModel` with the closures of the pulsed-magnetron
+global models (Raadu et al., *Plasma Sources Sci. Technol.* 20, 065007, 2011;
+Huo et al., *J. Phys. D* 46, 045204, 2013: the ionization region model):
+
+- **Ionization** of Ar and M by electron impact, charge exchange ``Ar+ + M``,
+  elastic and excitation losses on Ar.
+- **Ion losses** at the Bohm speed through the target (area ``A_t``) and the
+  other boundaries of the region, times an edge-to-centre ratio ``h``. The
+  ions that reach the target sputter it, ``Y_Ar`` atoms per ``Ar+`` and
+  ``Y_M`` per ``M+`` (self-sputtering): a `carafe.VolumeSource`
+  per unit ion density, ``Y h u_B(T_e) A_t / V``. An ``Ar+`` that reaches a wall
+  returns as ``Ar``; an ``M+`` that does is lost (deposited).
+- **Return of the metal**: the sputtered atoms leave the region at a quarter of
+  their mean speed through the whole boundary (they stick, probability 1), unless
+  they are ionized first. The ionized fraction that returns to the target, and
+  so the self-sputtering, is the share of the ion loss area that is the target;
+  there is no separate return probability.
+- **Gas**: Ar is fed and flows out on the time ``refill_time``, so it relaxes
+  to its filling density. With ``wind_efficiency`` ``eta``, every sputtered atom
+  also pushes ``eta`` Ar atoms out of the region (the sputter wind), the
+  rarefaction that limits the discharge current of a HiPIMS pulse. ``eta`` may
+  also be a function of the sputtered flux, e.g. a `WindEfficiency` derived from
+  the compressible gas (`wind_efficiency_from_gas_dynamics`): the constant
+  makes the rarefaction too strong at high current.
+- **Heating**: a share ``heating_fraction`` of the energy ``e V_D`` that the
+  secondary electrons (``gamma``) gain in the cathode fall goes into the plasma
+  electrons, ``P = f gamma / (1 + gamma) I_D V_D``: the prescribed discharge
+  current ``I_D(t)`` and voltage ``V_D(t)`` of an experiment (a pulse, or the dc
+  limit) give the absorbed power, and the model returns the densities, the
+  electron temperature, the ion current to the target it implies and the metal
+  fraction of the ions. A drive by the voltage alone has no steady state: the
+  absorbed power and the losses both scale with the density.
+
+Everything not listed here is missing: Ar metastables and Penning ionization,
+multiply charged metal ions, excitation and elastic scattering on the metal,
+gas heating and the energy of the sputtered atoms (they leave at the gas
+temperature), the radial structure of the plasma and the ionization zones
+(spokes) that make the discharge non-uniform.
+
+**Data.** plasmacoll ships no argon or metal cross sections. The argon rates are
+the fits of Lieberman and Lichtenberg, *Principles of Plasma Discharges and
+Materials Processing*, 2nd ed., ch. 3; the metal ionization rate is the Lotz
+approximation (Lotz, *Z. Phys.* 206, 205, 1967) averaged over a Maxwellian in
+closed form. Every other number (sputter and secondary electron yields, the
+charge-exchange rate, the geometry, the heating fraction, the wind efficiency,
+the refill time, the seed source) is a **placeholder** of the right order of
+magnitude, to be replaced by data for the target and the device: yields from
+TRIM/SRIM or measured tables at the ion energy of the cathode fall, secondary
+electron yields from the literature on ion-induced emission for the target
+material, geometry from the magnetron. A `Magnetron` with a placeholder
+material warns.
+
+All temperatures are in eV, densities in m^-3, areas in m^2, currents in A and
+voltages in V.
+"""
+
+from __future__ import annotations
+
+import dataclasses
+import warnings
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field
+
+import numpy as np
+import xarray as xr
+from methodcard import Rule, method
+from plasmacoll.constants import (
+    ATOMIC_MASS,
+    BOLTZMANN,
+    ELECTRON_MASS,
+    ELEMENTARY_CHARGE,
+)
+from plasmacoll.units import convert_units, to_array, to_unit, unit_field, unit_metadata
+from scipy.interpolate import PchipInterpolator
+from scipy.optimize import brentq
+from scipy.special import exp1
+
+from carafe.datasets import stack, variable
+from carafe.gasdynamics import (
+    ARGON_MASS,
+    Boundary,
+    GasDynamics,
+    ThermalRelaxation,
+    binary_diffusion,
+)
+from carafe.global_model import (
+    Chamber,
+    GlobalModel,
+    GlobalState,
+    VolumeSource,
+    WallReaction,
+)
+from carafe.reactions import Reaction
+from carafe.species import ELECTRON, Species
+
+__all__ = [
+    "COPPER",
+    "MATERIALS",
+    "TITANIUM",
+    "Magnetron",
+    "TargetMaterial",
+    "WindEfficiency",
+    "argon_elastic",
+    "argon_excitation",
+    "argon_ionization",
+    "lotz_ionization",
+    "pulse",
+    "sputter_wind_gas",
+    "wind_efficiency_from_gas_dynamics",
+]
+
+E = ELEMENTARY_CHARGE
+
+#: Argon ionization and excitation energies in eV.
+ARGON_IONIZATION_ENERGY = 15.76
+ARGON_EXCITATION_ENERGY = 11.56
+
+#: The constant of the Lotz formula, ``a = 4.5e-14 cm^2 eV^2``, in m^2 eV^2.
+LOTZ_CONSTANT = 4.5e-18
+
+
+def _fit_range(te: np.ndarray | float) -> np.ndarray | float:
+    """``T_e`` limited to 0.01-1000 eV, where the fits are evaluated (they overflow beyond)."""
+    return np.clip(te, 1.0e-2, 1.0e3)
+
+
+_ARGON_RANGES = {"te": (1.0, 50.0)}
+
+
+def _argon_ionization_rules() -> dict:
+    """The SymPy rule of `argon_ionization` (for the tests)."""
+    import sympy
+
+    te = sympy.Symbol("te", positive=True)
+    rule = (
+        sympy.Float("2.34e-14")
+        * te ** sympy.Float("0.59")
+        * sympy.exp(-sympy.Float("17.44") / te)
+    )
+    return {"rate": Rule(rule, ranges=_ARGON_RANGES)}
+
+
+@method(
+    equations={
+        "rate": r"K_\mathrm{iz} = 2.34\times10^{-14}\, T_e^{0.59}\, e^{-17.44/T_e} \quad [\mathrm{m^3/s}], \qquad \varepsilon_\mathrm{iz} = 15.76\ \mathrm{eV}",
+    },
+    assumptions=(
+        r"$T_e$ clipped to 0.01–1000 eV, where the fits are evaluated",
+        r"a Maxwellian electron energy distribution",
+    ),
+    references=(
+        "Lieberman and Lichtenberg, Principles of Plasma Discharges and Materials Processing, 2nd ed. (2005), ch. 3",
+    ),
+    symbolic=_argon_ionization_rules,
+)
+def argon_ionization(te: np.ndarray | float) -> np.ndarray | float:
+    """``K_iz = 2.34e-14 T_e^0.59 exp(-17.44 / T_e)`` m^3/s (Lieberman and Lichtenberg)."""
+    te = _fit_range(te)
+    return 2.34e-14 * te**0.59 * np.exp(-17.44 / te)
+
+
+def _argon_excitation_rules() -> dict:
+    """The SymPy rule of `argon_excitation` (for the tests)."""
+    import sympy
+
+    te = sympy.Symbol("te", positive=True)
+    rule = (
+        sympy.Float("2.48e-14")
+        * te ** sympy.Float("0.33")
+        * sympy.exp(-sympy.Float("12.78") / te)
+    )
+    return {"rate": Rule(rule, ranges=_ARGON_RANGES)}
+
+
+@method(
+    equations={
+        "rate": r"K_\mathrm{ex} = 2.48\times10^{-14}\, T_e^{0.33}\, e^{-12.78/T_e} \quad [\mathrm{m^3/s}], \qquad \varepsilon_\mathrm{ex} = 11.56\ \mathrm{eV}",
+    },
+    assumptions=(
+        r"$T_e$ clipped to 0.01–1000 eV, where the fits are evaluated",
+        r"a Maxwellian electron energy distribution",
+    ),
+    references=(
+        "Lieberman and Lichtenberg, Principles of Plasma Discharges and Materials Processing, 2nd ed. (2005), ch. 3",
+    ),
+    symbolic=_argon_excitation_rules,
+)
+def argon_excitation(te: np.ndarray | float) -> np.ndarray | float:
+    """``K_ex = 2.48e-14 T_e^0.33 exp(-12.78 / T_e)`` m^3/s (Lieberman and Lichtenberg)."""
+    te = _fit_range(te)
+    return 2.48e-14 * te**0.33 * np.exp(-12.78 / te)
+
+
+def _argon_elastic_rules() -> dict:
+    """The SymPy rule of `argon_elastic` (for the tests)."""
+    import sympy
+
+    te = sympy.Symbol("te", positive=True)
+    ln = sympy.log(te)
+    rule = (
+        sympy.Float("2.336e-14")
+        * te ** sympy.Float("1.609")
+        * sympy.exp(sympy.Float("0.0618") * ln**2 - sympy.Float("0.1171") * ln**3)
+    )
+    return {"rate": Rule(rule, ranges=_ARGON_RANGES)}
+
+
+@method(
+    equations={
+        "rate": r"K_\mathrm{el} = 2.336\times10^{-14}\, T_e^{1.609} \exp\!\left(0.0618 \ln^2 T_e - 0.1171 \ln^3 T_e\right) \quad [\mathrm{m^3/s}]",
+    },
+    assumptions=(
+        r"$T_e$ clipped to 0.01–1000 eV, where the fits are evaluated",
+        r"a Maxwellian electron energy distribution",
+    ),
+    references=(
+        "Lieberman and Lichtenberg, Principles of Plasma Discharges and Materials Processing, 2nd ed. (2005), ch. 3",
+    ),
+    symbolic=_argon_elastic_rules,
+)
+def argon_elastic(te: np.ndarray | float) -> np.ndarray | float:
+    """The elastic rate of electrons on argon in m^3/s (Lieberman and Lichtenberg's fit).
+
+    ``K_el = 2.336e-14 T_e^1.609 exp(0.0618 ln(T_e)^2 - 0.1171 ln(T_e)^3)``.
+    """
+    te = _fit_range(te)
+    ln = np.log(te)
+    return 2.336e-14 * te**1.609 * np.exp(0.0618 * ln**2 - 0.1171 * ln**3)
+
+
+def _lotz_rules() -> dict:
+    """The SymPy rule of `lotz_ionization` (for the tests)."""
+    import sympy
+
+    i, xi, te = sympy.symbols("ionization_energy electrons te", positive=True)
+    prefactor = sympy.sqrt(8 * sympy.Float(E) / (sympy.pi * sympy.Float(ELECTRON_MASS)))
+    rule = (
+        prefactor
+        * xi
+        * sympy.Float(LOTZ_CONSTANT)
+        * sympy.expint(1, i / te)
+        / (i * sympy.sqrt(te))
+    )
+    return {
+        "rate": Rule(
+            rule,
+            implementation=lambda ionization_energy, electrons, te: lotz_ionization(
+                ionization_energy, electrons
+            )(te),
+            ranges={
+                "ionization_energy": (5.0, 10.0),
+                "electrons": (1.0, 3.0),
+                "te": (1.0, 20.0),
+            },
+        )
+    }
+
+
+@method(
+    equations={
+        "cross_section": r"\sigma(E) = \xi\, a\, \frac{\ln(E/I)}{E\, I} \quad (E > I), \qquad a = 4.5\times10^{-14}\ \mathrm{cm^2\,eV^2}",
+        "rate": r"K = \sqrt{\frac{8e}{\pi m_e}}\, \frac{\xi\, a\, E_1(I/T_e)}{I \sqrt{T_e}}",
+    },
+    assumptions=(
+        r"the Lotz cross section averaged over a Maxwellian in closed form; $E_1$ the exponential integral",
+        r"$\xi$ the electrons of the outer shell, $I$ the ionization energy; good to a factor of about two",
+        r"$T_e$ clipped to 0.01–1000 eV",
+    ),
+    references=(
+        "[Lotz, Z. Phys. 206, 205 (1967)](https://doi.org/10.1007/BF01325928)",
+    ),
+    symbolic=_lotz_rules,
+)
+def lotz_ionization(
+    ionization_energy: float, electrons: int
+) -> Callable[[np.ndarray | float], np.ndarray | float]:
+    """The Maxwellian rate of the Lotz ionization cross section, in m^3/s.
+
+    The cross section ``sigma = xi a ln(E / I) / (E I)`` above the threshold
+    ``I`` (eV; ``a = 4.5e-14 cm^2 eV^2``, ``xi`` the electrons of the outer
+    shell) averaged over a Maxwellian of temperature ``T`` gives, in closed form,
+
+        K = sqrt(8 e / (pi m_e)) xi a E_1(I / T) / (I sqrt(T)),
+
+    with ``E_1`` the exponential integral. An approximation good to a factor of
+    about two, to replace by measured or recommended data for a given metal.
+    """
+    prefactor = (
+        np.sqrt(8.0 * E / (np.pi * ELECTRON_MASS))
+        * electrons
+        * LOTZ_CONSTANT
+        / ionization_energy
+    )
+
+    def rate(te: np.ndarray | float) -> np.ndarray | float:
+        te = _fit_range(te)
+        return prefactor * exp1(ionization_energy / te) / np.sqrt(te)
+
+    return rate
+
+
+@dataclass(frozen=True)
+class TargetMaterial:
+    """The sputtered metal and the response of the target to the ions.
+
+    Attributes:
+        name: The element, e.g. ``"Ti"``; the species are ``name`` and ``name+``.
+        mass_u: The atomic mass in u.
+        ionization_energy: The first ionization energy in eV.
+        outer_electrons: The electrons of the outer shell in the Lotz formula.
+        argon_yield: Atoms sputtered per ``Ar+`` at the cathode-fall energy.
+        self_yield: Atoms sputtered per metal ion (self-sputtering).
+        argon_secondary: Secondary electrons emitted per ``Ar+``.
+        self_secondary: Secondary electrons emitted per metal ion.
+        charge_exchange: Rate of ``Ar+ + M -> Ar + M+`` in m^3/s.
+        verified: ``False`` while the yields and rates are placeholders.
+
+    The mass, energy and rate take astropy Quantities or strings such as
+    ``"6.83 eV"`` too.
+    """
+
+    name: str
+    mass_u: float = field(metadata=unit_metadata("u"))
+    ionization_energy: float = field(metadata=unit_metadata("eV"))
+    outer_electrons: int
+    argon_yield: float
+    self_yield: float
+    argon_secondary: float
+    self_secondary: float
+    charge_exchange: float = field(metadata=unit_metadata("m^3 / s"))
+    verified: bool = False
+
+    def __post_init__(self) -> None:
+        """Validate the material."""
+        convert_units(self)
+        if self.mass_u <= 0.0 or self.ionization_energy <= 0.0:
+            raise ValueError("mass_u and ionization_energy must be > 0")
+        if min(self.argon_yield, self.self_yield) < 0.0:
+            raise ValueError("a sputter yield must be >= 0")
+        if min(self.argon_secondary, self.self_secondary) < 0.0:
+            raise ValueError("a secondary electron yield must be >= 0")
+
+
+def _material(
+    name: str,
+    mass_u: float,
+    ionization_energy: float,
+    outer_electrons: int,
+    argon_yield: float,
+    self_yield: float,
+    argon_secondary: float = 0.1,
+    self_secondary: float = 0.05,
+) -> TargetMaterial:
+    """A target material of the table below."""
+    return TargetMaterial(
+        name=name,
+        mass_u=mass_u,
+        ionization_energy=ionization_energy,
+        outer_electrons=outer_electrons,
+        argon_yield=argon_yield,
+        self_yield=self_yield,
+        argon_secondary=argon_secondary,
+        self_secondary=self_secondary,
+        charge_exchange=1.0e-15,
+    )
+
+
+#: The targets of the spoke literature. The atomic masses and first ionization
+#: energies (eV) are data. Everything else is a PLACEHOLDER of the right order and
+#: not checked against a source: the outer-shell electron count of the Lotz
+#: formula; the Ar and self-sputter yields at a few hundred eV (to take from
+#: Ziegler's SRIM or Yamamura-Tawara tables at the ion energy of the cathode
+#: fall: the review of Hecimovic and von Keudell, *J. Phys. D* 51, 453001, 2018,
+#: tabulates them for these metals, but this table was not copied from it);
+#: the ion-induced secondary electron yields (Depla et al.'s measurements for
+#: metals and oxides are the source to check); and the charge-exchange rate.
+MATERIALS: dict[str, TargetMaterial] = {
+    m.name: m
+    for m in (
+        _material("Al", 26.982, 5.986, 3, 0.65, 0.55),
+        _material("Cr", 51.996, 6.767, 1, 0.9, 0.8),
+        _material("Cu", 63.546, 7.726, 1, 1.0, 1.0),
+        _material("Ti", 47.867, 6.828, 2, 0.4, 0.3),
+        _material("Au", 196.967, 9.226, 1, 2.4, 2.5),
+        _material("Mo", 95.95, 7.092, 1, 0.7, 0.8),
+        _material("Nb", 92.906, 6.759, 1, 0.5, 0.6),
+    )
+}
+
+#: Titanium and copper, the defaults of the examples (placeholder yields, see `MATERIALS`).
+TITANIUM = MATERIALS["Ti"]
+COPPER = MATERIALS["Cu"]
+
+
+def pulse(
+    on: float, on_time: float, period: float, off: float = 0.0
+) -> Callable[[float], float]:
+    """A rectangular waveform: ``on`` for ``on_time`` of every ``period``, else ``off``.
+
+    The times are in s, or Quantities or strings such as ``"50 us"``.
+    """
+    on_time = to_unit(on_time, "s", "on_time")
+    period = to_unit(period, "s", "period")
+    if not 0.0 < on_time < period:
+        raise ValueError("on_time must be in (0, period)")
+
+    def waveform(t: float) -> float:
+        return on if (t % period) < on_time else off
+
+    return waveform
+
+
+@method(
+    equations={
+        "geometry": r"V = A_t h_r, \qquad A_w = 2A_t + A_s, \qquad A_\mathrm{loss} = A_t + A_s",
+        "sputtering": r"S_M = Y\, \frac{h\, u_B(T_e) A_t}{V}\, n_i \quad (Y_\mathrm{Ar} \text{ per Ar}^+,\ Y_M \text{ per M}^+), \qquad S_\mathrm{wind} = -\eta_w(\Gamma) S_M \text{ (Ar)}, \quad \Gamma = \frac{S_M V}{A_t}",
+        "gas": r"F_\mathrm{Ar} = \frac{n_\mathrm{fill} V}{\tau}, \qquad \text{Ar} \to \varnothing \text{ at the rate } \frac{1}{\tau}",
+        "heating": r"P = f\, \frac{\gamma}{1 + \gamma}\, I_D(t)\, V_D(t)",
+        "currents": r"I_i = e\, n_i\, h\, u_B A_t, \qquad I_D = \sum_i (1 + \gamma_i)\, I_i",
+    },
+    assumptions=(
+        r"the ionization region as a `GlobalModel` of e, Ar, Ar$^+$, M, M$^+$; metal sticks at the walls, Ar$^+$ returns as Ar",
+        r"no metastables, no multiply charged ions, no gas heating; a drive by the voltage alone has no steady state",
+        r"yields, secondary yields, charge exchange and the geometry are placeholders (`MATERIALS`)",
+        r"$\eta_w$ a number, or a function of the sputtered flux (`wind_efficiency_from_gas_dynamics`)",
+    ),
+    references=(
+        "[Raadu et al., Plasma Sources Sci. Technol. 20, 065007 (2011)](https://doi.org/10.1088/0963-0252/20/6/065007)",
+        "Huo et al., J. Phys. D 46, 045204 (2013)",
+    ),
+    components=(
+        GlobalModel,
+        argon_ionization,
+        argon_excitation,
+        argon_elastic,
+        lotz_ionization,
+    ),
+)
+@dataclass(frozen=True)
+class Magnetron:
+    """The ionization region of a magnetron: geometry, gas and target; see the module docstring.
+
+    The defaults are placeholders of the order of a 3 inch magnetron, not a
+    particular device.
+
+    Attributes:
+        material: The target material.
+        target_area: The area of the racetrack the ions hit, in m^2.
+        region_height: The height of the ionization region above it in m; the
+            volume is ``target_area * region_height``.
+        side_area: The other boundaries ions leave the region through, in m^2.
+        h_factor: The edge-to-centre density ratio at the boundaries.
+        pressure: The argon filling pressure in Pa, at ``gas_temperature``.
+        gas_temperature: The gas temperature in K.
+        refill_time: The time in s in which the argon of the region is replaced.
+        wind_efficiency: Ar atoms pushed out per sputtered atom (0: no sputter
+            wind): a number, or a function ``eta(Gamma)`` of the sputtered flux
+            ``Gamma`` at the target in m^-2 s^-1, e.g. a `WindEfficiency` from
+            `wind_efficiency_from_gas_dynamics`.
+        heating_fraction: The share of the secondary electron energy the plasma
+            electrons keep: at most 1 if the secondary electron yield is right;
+            a larger value, as `calibrate_heating` may find, means the yield
+            of the placeholder material is too low (only the product matters).
+        seed: A pair source in m^-3 s^-1 that stands for the residual plasma
+            and preionization at the start of a pulse; it keeps the density from
+            decaying to zero in the afterglow.
+
+    The physical settings take astropy Quantities or strings such as
+    ``"0.5 Pa"``, ``"10 mTorr"`` or ``"20 mm"`` too (the gas temperature also
+    in eV), converted to the units above; the discharge current (A) and
+    voltage (V) of the methods likewise.
+    """
+
+    material: TargetMaterial = TITANIUM
+    target_area: float = unit_field("m^2", 1.0e-3)
+    region_height: float = unit_field("m", 0.02)
+    side_area: float = unit_field("m^2", 1.0e-4)
+    h_factor: float = 0.5
+    pressure: float = unit_field("Pa", 1.0)
+    gas_temperature: float = unit_field("K", 300.0)
+    refill_time: float = unit_field("s", 1.0e-4)
+    wind_efficiency: float | Callable[[float], float] = 0.0
+    heating_fraction: float = 1.0
+    seed: float = unit_field("m^-3 / s", 1.0e19)
+
+    def __post_init__(self) -> None:
+        """Validate the magnetron, and warn about placeholder data."""
+        convert_units(self)
+        positive = (
+            self.target_area,
+            self.region_height,
+            self.pressure,
+            self.gas_temperature,
+            self.refill_time,
+        )
+        if min(positive) <= 0.0 or self.side_area < 0.0:
+            raise ValueError("areas, height, pressure, temperature and times > 0")
+        if not 0.0 < self.h_factor <= 1.0:
+            raise ValueError("h_factor must be in (0, 1]")
+        if self.heating_fraction < 0.0:
+            raise ValueError("heating_fraction must be >= 0")
+        wind = self.wind_efficiency
+        if (not callable(wind) and wind < 0.0) or self.seed < 0.0:
+            raise ValueError("wind_efficiency and seed must be >= 0")
+        if not self.material.verified:
+            warnings.warn(
+                f"{self.material.name}: the sputter and secondary electron yields and "
+                "the charge-exchange rate are placeholders, not data",
+                UserWarning,
+                stacklevel=2,
+            )
+
+    # -- the plasma -------------------------------------------------------------------
+
+    @property
+    def volume(self) -> float:
+        """The volume of the ionization region in m^3."""
+        return self.target_area * self.region_height
+
+    @property
+    def gas_density(self) -> float:
+        """The argon filling density in m^-3."""
+        return self.pressure / (BOLTZMANN * self.gas_temperature)
+
+    @property
+    def species(self) -> dict[str, Species]:
+        """The species by role: ``e``, ``gas``, ``gas_ion``, ``metal``, ``metal_ion``."""
+        m = self.material
+        return {
+            "e": ELECTRON,
+            "gas": Species.atomic("Ar", 39.948),
+            "gas_ion": Species.atomic("Ar+", 39.948, 1),
+            "metal": Species.atomic(m.name, m.mass_u),
+            "metal_ion": Species.atomic(f"{m.name}+", m.mass_u, 1),
+        }
+
+    @property
+    def chamber(self) -> Chamber:
+        """The region as a chamber: ions leave through the target and the sides."""
+        wall = 2.0 * self.target_area + self.side_area
+        return Chamber(
+            volume=self.volume,
+            wall_area=wall,
+            ion_loss_area=self.target_area + self.side_area,
+            h_factor=self.h_factor,
+        )
+
+    def bohm_flux_coefficient(self, te: float, ion: str) -> float:
+        """The loss rate of the ion named ``ion`` to the target per unit density, in 1/s.
+
+        ``h u_B(T_e) A_t / V``.
+        """
+        mass = next(s.mass for s in self.species.values() if s.name == ion)
+        return self.h_factor * np.sqrt(E * te / mass) * self.target_area / self.volume
+
+    def reactions(self) -> list[Reaction]:
+        """The ionization, excitation, elastic and charge-exchange reactions."""
+        s = self.species
+        m = self.material
+        gas, metal = s["gas"].name, s["metal"].name
+        metal_ion = s["metal_ion"].name
+        return [
+            Reaction(
+                ("e", gas),
+                ("e", "e", s["gas_ion"].name),
+                argon_ionization,
+                electron_energy_loss=ARGON_IONIZATION_ENERGY,
+                name="Ar ionization",
+            ),
+            Reaction(
+                ("e", gas),
+                ("e", gas),
+                argon_excitation,
+                electron_energy_loss=ARGON_EXCITATION_ENERGY,
+                name="Ar excitation",
+            ),
+            Reaction(
+                ("e", gas),
+                ("e", gas),
+                argon_elastic,
+                elastic_mass=s["gas"].mass,
+                name="Ar elastic",
+            ),
+            Reaction(
+                ("e", metal),
+                ("e", "e", metal_ion),
+                lotz_ionization(m.ionization_energy, m.outer_electrons),
+                electron_energy_loss=m.ionization_energy,
+                name=f"{m.name} ionization",
+            ),
+            Reaction(
+                (s["gas_ion"].name, metal),
+                (gas, metal_ion),
+                m.charge_exchange,
+                temperature="gas",
+                name="charge exchange",
+            ),
+            Reaction(
+                (gas,),
+                (),
+                1.0 / self.refill_time,
+                temperature="gas",
+                name="Ar flow out",
+            ),
+        ]
+
+    def _sputtered(self, te: float, densities: Mapping[str, float]) -> float:
+        """The sputtered atoms per unit volume and time (m^-3 s^-1) at ``T_e`` and densities."""
+        s = self.species
+        m = self.material
+        rate = 0.0
+        for role, sputter in (("gas_ion", m.argon_yield), ("metal_ion", m.self_yield)):
+            name = s[role].name
+            rate += sputter * self.bohm_flux_coefficient(te, name) * densities[name]
+        return rate
+
+    def _flux_wind(
+        self, te: float, _tg: float, densities: Mapping[str, float]
+    ) -> float:
+        """The Ar pushed out by a flux-dependent wind (m^-3 s^-1): ``eta(Gamma) S_M``."""
+        sputtered = self._sputtered(te, densities)
+        flux = sputtered * self.volume / self.target_area
+        return float(self.wind_efficiency(flux)) * sputtered  # type: ignore[operator]
+
+    def sources(self) -> list[VolumeSource]:
+        """Sputtering and the sputter wind by the ion flux to the target, and the seed."""
+        s = self.species
+        m = self.material
+        sources = []
+        for ion, sputter in (("gas_ion", m.argon_yield), ("metal_ion", m.self_yield)):
+            name = s[ion].name
+
+            def flux(te: float, _tg: float, name: str = name) -> float:
+                return self.bohm_flux_coefficient(te, name)
+
+            def yielded(
+                te: float, tg: float, flux=flux, sputter: float = sputter
+            ) -> float:
+                return sputter * flux(te, tg)
+
+            def wind(te: float, tg: float, yielded=yielded) -> float:
+                return self.wind_efficiency * yielded(te, tg)  # type: ignore[operator]
+
+            sources.append(
+                VolumeSource(
+                    {s["metal"].name: 1},
+                    yielded,
+                    per=(name,),
+                    name=f"sputtering by {name}",
+                )
+            )
+            if self.wind_efficiency and not callable(self.wind_efficiency):
+                sources.append(
+                    VolumeSource(
+                        {s["gas"].name: -1},
+                        wind,
+                        per=(name,),
+                        name=f"sputter wind of {name}",
+                    )
+                )
+        if callable(self.wind_efficiency):
+            sources.append(
+                VolumeSource(
+                    {s["gas"].name: -1},
+                    self._flux_wind,
+                    name="sputter wind",
+                    of_densities=True,
+                )
+            )
+        if self.seed:
+            sources.append(
+                VolumeSource(
+                    {s["gas_ion"].name: 1, "e": 1}, self.seed, name="preionization"
+                )
+            )
+        return sources
+
+    def wind_efficiency_at(self, state: GlobalState) -> float:
+        """The wind efficiency in effect in a state (the number, or ``eta(Gamma)``)."""
+        if not callable(self.wind_efficiency):
+            return float(self.wind_efficiency)
+        flux = self.target_currents(state)["sputtered"] / self.target_area
+        return float(self.wind_efficiency(flux))
+
+    def heating_power(self, current: float, voltage: float) -> float:
+        """The power the plasma electrons absorb at a discharge current and voltage, in W.
+
+        ``P = f gamma / (1 + gamma) I_D V_D``, with ``gamma`` the secondary
+        electron yield of the argon ions.
+        """
+        gamma = self.material.argon_secondary
+        return self.heating_fraction * gamma / (1.0 + gamma) * current * voltage
+
+    def model(
+        self,
+        current: float | Callable[[float], float],
+        voltage: float | Callable[[float], float],
+    ) -> GlobalModel:
+        """The global model driven by the discharge current ``I_D(t)`` and voltage ``V_D(t)``.
+
+        Each is a number (dc) in A and V, a Quantity or a string such as
+        ``"20 A"``, or a function of the time in s, e.g. from `pulse`.
+        """
+        if not callable(current):
+            current = to_unit(current, "A", "current")
+        if not callable(voltage):
+            voltage = to_unit(voltage, "V", "voltage")
+
+        def absorbed(t: float) -> float:
+            i = current(t) if callable(current) else current
+            v = voltage(t) if callable(voltage) else voltage
+            return self.heating_power(i, v)
+
+        s = self.species
+        walls = [WallReaction(s["metal"].name, 1.0)]
+        return GlobalModel(
+            species=list(s.values()),
+            reactions=self.reactions(),
+            chamber=self.chamber,
+            power=absorbed,
+            feed={s["gas"].name: self.gas_density * self.volume / self.refill_time},
+            sources=self.sources(),
+            wall_reactions=walls,
+            ion_wall_products={s["gas_ion"].name: {s["gas"].name: 1}},
+            gas_temperature=BOLTZMANN * self.gas_temperature / E,
+            thermalize_electrons=True,
+        )
+
+    def guess(self, ion_density: float = 1.0e17) -> dict[str, float]:
+        """A starting state: the filling gas and a plasma of ``ion_density`` (m^-3)."""
+        ion_density = to_unit(ion_density, "m^-3", "ion_density")
+        s = self.species
+        return {
+            s["gas"].name: self.gas_density,
+            s["gas_ion"].name: ion_density,
+            s["metal"].name: 1.0e-3 * self.gas_density,
+            s["metal_ion"].name: 0.1 * ion_density,
+            "Te": 3.0,
+        }
+
+    def steady_state(
+        self,
+        current: float,
+        voltage: float,
+        initial: Mapping[str, float] | GlobalState | None = None,
+    ) -> GlobalState:
+        """The dc state at a discharge current and voltage."""
+        model = self.model(current, voltage)
+        with np.errstate(over="ignore", invalid="ignore"):  # trial states of the solver
+            return model.steady_state(self.guess() if initial is None else initial)
+
+    def calibrate_heating(self, current: float, voltage: float) -> Magnetron:
+        """A copy whose heating fraction makes the dc discharge current match ``current``.
+
+        The share of the secondary electron energy that heats the plasma is the
+        least known closure. The model's own ion current to the target,
+        ``I_D`` of `target_currents`, rises with it; this fits it to one
+        measured point so that the others are predictions. A value above 1
+        means the secondary electron yield is too low; it raises a
+        ``ValueError`` if no value up to 10 does, which says that the sputter
+        yields or the geometry are off.
+        """
+        current = to_unit(current, "A", "current")
+
+        def mismatch(fraction: float) -> float:
+            magnetron = dataclasses.replace(self, heating_fraction=fraction)
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", UserWarning)
+                state = magnetron.steady_state(current, voltage)
+            return magnetron.target_currents(state)["I_D"] / current - 1.0
+
+        lo, hi = 1.0e-3, 10.0
+        if mismatch(lo) * mismatch(hi) > 0.0:
+            raise ValueError(
+                "no heating fraction up to 10 reproduces the current: "
+                "check the yields and the geometry"
+            )
+        fraction, _ = brentq(mismatch, lo, hi, xtol=1.0e-6, full_output=True)
+        return dataclasses.replace(self, heating_fraction=float(fraction))
+
+    # -- the target -------------------------------------------------------------------
+
+    def target_currents(self, state: GlobalState) -> dict[str, float]:
+        """The currents and fluxes at the target for a state.
+
+        Returns the ion currents ``I_<ion>`` to the target in A, the discharge
+        current ``I_D`` including the secondary electrons, the sputtered atom
+        flux ``sputtered`` in 1/s, the ``metal_ion_fraction`` of the ion flux to
+        the target and the ``metal_ion_density_fraction`` of the ion density.
+        """
+        s = self.species
+        m = self.material
+        te = state.electron_temperature
+        currents = {}
+        for role, secondary in (
+            ("gas_ion", m.argon_secondary),
+            ("metal_ion", m.self_secondary),
+        ):
+            name = s[role].name
+            rate = state.densities[name] * self.bohm_flux_coefficient(te, name)
+            currents[f"I_{name}"] = E * rate * self.volume
+            currents[f"I_D_{name}"] = (1.0 + secondary) * currents[f"I_{name}"]
+        gas_ion, metal_ion = s["gas_ion"].name, s["metal_ion"].name
+        sputtered = (
+            m.argon_yield * currents[f"I_{gas_ion}"]
+            + m.self_yield * currents[f"I_{metal_ion}"]
+        ) / E
+        ions = state.densities[gas_ion] + state.densities[metal_ion]
+        ion_current = currents[f"I_{gas_ion}"] + currents[f"I_{metal_ion}"]
+        return {
+            **currents,
+            "I_D": currents[f"I_D_{gas_ion}"] + currents[f"I_D_{metal_ion}"],
+            "sputtered": sputtered,
+            "metal_ion_fraction": currents[f"I_{metal_ion}"] / ion_current,
+            "metal_ion_density_fraction": state.densities[metal_ion] / ions,
+        }
+
+    def diagnostics(self, state: GlobalState) -> dict[str, float]:
+        """The quantities that decide the spoke regime, for a state.
+
+        - ``rarefaction``: ``n_Ar`` in the region over the filling density
+          (1: none; the sputter wind and the ionization of the gas lower it);
+        - ``metal_to_argon``: the neutral metal over the neutral argon density;
+        - ``metal_ion_fraction``: the metal share of the ion flux to the target;
+        - ``self_sputtering_share``: the share of the sputtered flux that the
+          metal ions make (1: the discharge runs on the metal alone);
+        - ``electron_density`` in m^-3, and the electron temperature in eV;
+        - ``discharge_current``: the model's ``I_D`` in A, to compare with the
+          prescribed one;
+        - ``wind_efficiency``: the ``eta`` of the sputter wind in effect.
+        """
+        s = self.species
+        m = self.material
+        currents = self.target_currents(state)
+        gas_ion, metal_ion = s["gas_ion"].name, s["metal_ion"].name
+        from_argon = m.argon_yield * currents[f"I_{gas_ion}"]
+        from_metal = m.self_yield * currents[f"I_{metal_ion}"]
+        sputtered = from_argon + from_metal
+        density = state.densities
+        return {
+            "rarefaction": density[s["gas"].name] / self.gas_density,
+            "metal_to_argon": density[s["metal"].name] / density[s["gas"].name],
+            "metal_ion_fraction": currents["metal_ion_fraction"],
+            "self_sputtering_share": from_metal / sputtered if sputtered > 0.0 else 0.0,
+            "electron_density": density["e"],
+            "electron_temperature": state.electron_temperature,
+            "discharge_current": currents["I_D"],
+            "wind_efficiency": self.wind_efficiency_at(state),
+        }
+
+    def metal_ionization(self, state: GlobalState) -> float:
+        """The ionized fraction of the metal in the region, ``n_M+ / (n_M + n_M+)``."""
+        s = self.species
+        metal, metal_ion = s["metal"].name, s["metal_ion"].name
+        total = state.densities[metal] + state.densities[metal_ion]
+        return state.densities[metal_ion] / total
+
+    def _series(self, states: list[GlobalState], times: np.ndarray) -> xr.Dataset:
+        """The time series of a list of states as a dataset."""
+        data = stack(states, "t", times, long_name="time in the period", units="s")
+        columns = [self.target_currents(state) for state in states]
+        for key, long_name, units in (
+            ("I_D", "discharge current", "A"),
+            ("sputtered", "sputtered atoms", "s^-1"),
+            ("metal_ion_fraction", "metal fraction of the ion flux", ""),
+        ):
+            data[key] = variable("t", [c[key] for c in columns], long_name, units)
+        diagnostics = [self.diagnostics(state) for state in states]
+        for key, long_name in (
+            ("rarefaction", "argon density over the filling density"),
+            ("self_sputtering_share", "self-sputtering share of the sputtered flux"),
+            ("metal_to_argon", "neutral metal over argon density"),
+        ):
+            data[key] = variable("t", [d[key] for d in diagnostics], long_name)
+        data["metal_ionization"] = variable(
+            "t",
+            [self.metal_ionization(state) for state in states],
+            "ionized fraction of the metal",
+        )
+        return data
+
+    # -- pulses -----------------------------------------------------------------------
+
+    def pulse(
+        self,
+        current: float,
+        voltage: float,
+        on_time: float,
+        period: float,
+        *,
+        periods: int = 20,
+        points: int = 200,
+        tolerance: float = 1.0e-3,
+        initial: Mapping[str, float] | GlobalState | None = None,
+    ) -> xr.Dataset:
+        """The periodic state of a rectangular pulse, as a dataset over the time ``t`` in a period.
+
+        The discharge current and voltage are ``current`` and ``voltage`` for
+        ``on_time`` seconds of every ``period``, and zero in between. Periods
+        are run until the densities at the start of a period change by less than
+        ``tolerance`` (relative, in the log) from one period to the next, or
+        ``periods`` are done; ``attrs["periodicity_error"]`` is the last change
+        and ``attrs["periods"]`` how many were run. The variables are the
+        densities, the electron temperature, the model's currents at the target
+        (``I_D``, ``I_<ion>``), the sputtered flux and the metal ion fraction.
+        The current (A), voltage (V) and times (s) take Quantities or strings
+        such as ``"100 us"`` too.
+        """
+        current = to_unit(current, "A", "current")
+        voltage = to_unit(voltage, "V", "voltage")
+        on_time = to_unit(on_time, "s", "on_time")
+        period = to_unit(period, "s", "period")
+        if not 0.0 < on_time < period:
+            raise ValueError("on_time must be in (0, period)")
+        drive_current = pulse(current, on_time, period)
+        drive_voltage = pulse(voltage, on_time, period)
+        model = self.model(drive_current, drive_voltage)
+        times = np.linspace(0.0, period, points)
+        state = self.guess(1.0e14) if initial is None else initial
+        error = np.inf
+        run = 0
+        states: list[GlobalState] = []
+        for run in range(1, periods + 1):
+            # the state at the start of the period is the state at its end
+            shifted = (run - 1) * period + times
+            with np.errstate(over="ignore", invalid="ignore"):
+                states = model.evolve(
+                    shifted, state, breakpoints=[shifted[0] + on_time]
+                )
+            previous = state if isinstance(state, GlobalState) else None
+            state = states[-1]
+            if previous is not None:
+                error = max(
+                    abs(np.log(state.densities[k] / previous.densities[k]))
+                    for k in state.densities
+                )
+                if error < tolerance:
+                    break
+        data = self._series(states, times)
+        data.attrs.update(
+            periodicity_error=float(error), periods=run, on_time=on_time, period=period
+        )
+        return data
+
+    def current_scan(
+        self,
+        currents: Sequence[float],
+        voltage: float | Callable[[float], float],
+    ) -> xr.Dataset:
+        """The dc states against the discharge current, with the spoke diagnostics.
+
+        ``voltage`` is a number or a function of the current ``V_D(I_D)``, e.g.
+        the measured characteristic. Every state starts from the last (a
+        continuation); the dataset has the densities (``species``), the
+        `diagnostics` and the model's ``I_D`` over ``current``. The currents
+        (A) and a voltage (V) take Quantities or strings such as ``"[5, 10] A"``
+        too.
+        """
+        currents = to_array(currents, "A", "currents")
+        if not callable(voltage):
+            voltage = to_unit(voltage, "V", "voltage")
+        states: list[GlobalState] = []
+        previous: GlobalState | None = None
+        for current in currents:
+            v = voltage(current) if callable(voltage) else voltage
+            state = self.steady_state(current, v, previous)
+            states.append(state)
+            previous = state
+        data = stack(
+            states, "current", currents, long_name="discharge current", units="A"
+        )
+        columns = [self.diagnostics(state) for state in states]
+        for key, long_name, units in (
+            ("rarefaction", "argon density over the filling density", ""),
+            ("metal_to_argon", "neutral metal over argon density", ""),
+            ("metal_ion_fraction", "metal fraction of the ion flux", ""),
+            (
+                "self_sputtering_share",
+                "self-sputtering share of the sputtered flux",
+                "",
+            ),
+            ("electron_density", "electron density", "m^-3"),
+            ("discharge_current", "discharge current of the model", "A"),
+        ):
+            data[key] = variable("current", [c[key] for c in columns], long_name, units)
+        data["converged"] = variable(
+            "current", [s.converged for s in states], "converged"
+        )
+        return data
+
+    def scan(
+        self, parameter: str, values: list, current: float, voltage: float
+    ) -> list[GlobalState]:
+        """Dc states for values of a field of the magnetron, each started from the last."""
+        states: list[GlobalState] = []
+        previous: GlobalState | None = None
+        for value in values:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", UserWarning)
+                magnetron = dataclasses.replace(self, **{parameter: value})
+            state = magnetron.steady_state(current, voltage, previous)
+            states.append(state)
+            previous = state
+        return states
+
+
+# -- the sputter wind from the gas dynamics ---------------------------------------------
+
+#: The mean hard-sphere diameter of argon and the metal atoms in the diffusion of the
+#: metal through the gas, in m: PLACEHOLDER (argon 3.6, titanium 3.0 angstrom, unchecked).
+WIND_COLLISION_DIAMETER = 3.3e-10
+#: The heat conductivity of argon at 300 K in W/(m K): PLACEHOLDER, to check.
+WIND_GAS_CONDUCTIVITY = 0.02
+#: The width of the channel whose side walls cool the gas, in m: PLACEHOLDER (a free
+#: molecular heat exchange with walls this far apart, of the order of a racetrack).
+WIND_CHANNEL_WIDTH = 0.01
+#: The sputtered fluxes (m^-2 s^-1) `wind_efficiency_from_gas_dynamics` evaluates by
+#: default: about 0.5 to 150 A on the default target of 10 cm^2.
+WIND_FLUXES = (1.0e21, 3.0e21, 1.0e22, 3.0e22, 1.0e23, 4.0e23)
+
+
+@dataclass(frozen=True)
+class WindEfficiency:
+    """A wind efficiency that depends on the sputtered flux, interpolated between points.
+
+    Called with the sputtered flux ``Gamma`` at the target (m^-2 s^-1), it returns
+    ``eta(Gamma)``: a monotone cubic (PCHIP) interpolation of ``log eta`` in
+    ``log Gamma`` (a power law between two points, as ``eta ~ 1 / Gamma`` where the
+    rarefaction saturates), constant outside the range of ``flux`` (give points that
+    cover the discharge). Pass it as the ``wind_efficiency`` of a `Magnetron`.
+
+    Attributes:
+        flux: The sputtered fluxes in m^-2 s^-1, increasing.
+        efficiency: ``eta`` at each flux, >= 0.
+        deficit: The mean argon deficit ``1 - <n_Ar> / n_fill`` it was derived from, if
+            any (`wind_efficiency_from_gas_dynamics`).
+    """
+
+    flux: tuple[float, ...]
+    efficiency: tuple[float, ...]
+    deficit: tuple[float, ...] | None = None
+    _interpolant: Callable[[np.ndarray], np.ndarray] = field(
+        init=False, repr=False, compare=False
+    )
+
+    def __post_init__(self) -> None:
+        """Validate the points and set up the interpolation."""
+        flux = np.asarray(self.flux, dtype=float).reshape(-1)
+        efficiency = np.asarray(self.efficiency, dtype=float).reshape(-1)
+        if flux.size < 1 or flux.size != efficiency.size:
+            raise ValueError("flux and efficiency are points of the same length >= 1")
+        if np.any(flux <= 0.0) or np.any(np.diff(flux) <= 0.0):
+            raise ValueError("the fluxes must be > 0 and increasing")
+        if np.any(efficiency < 0.0) or not np.all(np.isfinite(efficiency)):
+            raise ValueError("a wind efficiency must be finite and >= 0")
+        object.__setattr__(self, "flux", tuple(float(f) for f in flux))
+        object.__setattr__(self, "efficiency", tuple(float(e) for e in efficiency))
+        if self.deficit is not None:
+            object.__setattr__(self, "deficit", tuple(float(d) for d in self.deficit))
+        # log eta, floored so that a point of zero efficiency stays finite
+        floor = 1.0e-12 * max(float(efficiency.max()), 1.0e-300)
+        log_efficiency = np.log(np.maximum(efficiency, floor))
+        interpolant: Callable[[np.ndarray], np.ndarray]
+        if flux.size == 1:
+            value = float(log_efficiency[0])
+            interpolant = lambda x: np.full_like(x, value)  # noqa: E731
+        else:
+            interpolant = PchipInterpolator(np.log(flux), log_efficiency)
+        object.__setattr__(self, "_interpolant", interpolant)
+
+    def __call__(self, flux: float | np.ndarray) -> float | np.ndarray:
+        """``eta`` at the sputtered flux (m^-2 s^-1); constant outside the points."""
+        values = np.asarray(flux, dtype=float)
+        log_flux = np.log(np.clip(values, self.flux[0], self.flux[-1]))
+        result = np.exp(self._interpolant(log_flux))
+        return float(result) if np.ndim(result) == 0 else result
+
+
+def sputter_wind_gas(
+    magnetron: Magnetron,
+    flux: float,
+    *,
+    metal_energy: float | None = None,
+    cells: int = 40,
+) -> GasDynamics:
+    """The gas in front of the target of a magnetron as a `carafe.GasDynamics`.
+
+    One dimension along the height of the ionization region (``region_height``): the
+    target at ``x = 0`` emits ``flux`` sputtered atoms per m^2 and s, the far end is a
+    reservoir of argon at the filling pressure and the gas temperature (the refill), and
+    the side walls of a channel ``WIND_CHANNEL_WIDTH`` wide cool the gas. The atoms
+    leave with ``metal_energy`` (eV; default ``2 k T_g``: cold atoms at the gas
+    temperature, as the global model assumes). The diffusion of the metal (hard spheres
+    of ``WIND_COLLISION_DIAMETER``), the conductivity ``WIND_GAS_CONDUCTIVITY`` and
+    the channel width are placeholders. The gas starts at rest at the filling state.
+
+    This is the continuum (Euler, with species diffusion) limit: at 1 Pa the mean free
+    path of argon is a few mm, a Knudsen number of the region near 1, so a kinetic
+    (DSMC) check is due.
+    """
+    temperature = magnetron.gas_temperature
+    if metal_energy is None:
+        metal_energy = 2.0 * BOLTZMANN * temperature / E
+    metal_mass = magnetron.material.mass_u * ATOMIC_MASS
+
+    def diffusion(t: np.ndarray, p: np.ndarray) -> np.ndarray:
+        diameter = WIND_COLLISION_DIAMETER
+        return np.asarray(binary_diffusion(ARGON_MASS, metal_mass, diameter, t, p))
+
+    model = GasDynamics(
+        magnetron.region_height,
+        cells,
+        metal_mass=metal_mass,
+        diffusion=diffusion,
+        thermal_conductivity=WIND_GAS_CONDUCTIVITY,
+        boundaries={
+            "left": Boundary.wall(
+                temperature, metal_flux=flux, metal_energy=metal_energy
+            ),
+            "right": Boundary.inflow(magnetron.pressure, temperature),
+        },
+    )
+    mean_speed = np.sqrt(8.0 * BOLTZMANN * temperature / (np.pi * ARGON_MASS))
+    model.relaxation.append(
+        ThermalRelaxation(2.0 * mean_speed / (3.0 * WIND_CHANNEL_WIDTH))
+    )
+    model.set_uniform(magnetron.pressure, temperature)
+    return model
+
+
+@method(
+    equations={
+        "argon": r"\frac{dn_\mathrm{Ar}}{dt} + \frac{dn_{\mathrm{Ar}^+}}{dt} = \frac{n_\mathrm{fill} - n_\mathrm{Ar}}{\tau} - \eta_w \frac{\Gamma A_t}{V} \;\Rightarrow\; \Delta_\mathrm{0D} = 1 - \frac{n_\mathrm{Ar}}{n_\mathrm{fill}} = \frac{\eta_w \tau \Gamma}{h_r n_\mathrm{fill}}",
+        "efficiency": r"\eta_w(\Gamma_k) = \frac{\Delta_\mathrm{gas}(\Gamma_k)\, h_r n_\mathrm{fill}}{\tau \Gamma_k}, \qquad \Delta_\mathrm{gas} = 1 - \frac{\langle n_\mathrm{Ar} \rangle_x}{n_\mathrm{fill}}",
+        "interpolation": r"\ln\eta_w(\Gamma) = \mathrm{PCHIP}_k(\ln\Gamma), \quad \text{constant outside } [\Gamma_1, \Gamma_K]",
+    },
+    assumptions=(
+        r"the 0D argon budget at steady state: the ions return as neutrals and only neutrals flow out, so $n_\mathrm{Ar}$ follows from the wind alone (the seed adds $\tau S_\mathrm{seed}/n_\mathrm{fill} \lesssim 10^{-5}$)",
+        r"the gas dynamics (`sputter_wind_gas`) is the continuum (Euler) limit at Knudsen numbers near 1: a DSMC check is due",
+        r"cold sputtered atoms at the gas temperature, no return of the ions as neutrals and no ionization in the gas dynamics: $\eta_w$ is the wind alone",
+        r"$\eta_w$ absorbs the placeholder refill time $\tau$ and height $h_r$: it holds for the magnetron it was derived for",
+    ),
+    references=(
+        "Hecimovic and von Keudell, J. Phys. D 51, 453001 (2018)",
+        "[Raadu et al., Plasma Sources Sci. Technol. 20, 065007 (2011)](https://doi.org/10.1088/0963-0252/20/6/065007)",
+    ),
+    components=(GasDynamics,),
+)
+def wind_efficiency_from_gas_dynamics(
+    magnetron: Magnetron,
+    fluxes: Sequence[float] = WIND_FLUXES,
+    *,
+    gas: Callable[[float], GasDynamics] | None = None,
+    tolerance: float = 1.0e-4,
+    max_time: float = 1.0e-2,
+) -> WindEfficiency:
+    """The wind efficiency ``eta(Gamma)`` that makes the global model's rarefaction the gas's.
+
+    For each sputtered flux ``Gamma`` (m^-2 s^-1) the compressible gas in front of the
+    target (``gas(Gamma)``, default `sputter_wind_gas` of ``magnetron``) is run to its
+    steady state (`carafe.GasDynamics.steady_state` with ``tolerance`` and
+    ``max_time``), and its mean argon deficit ``Delta = 1 - <n_Ar> / n_fill`` sets
+    ``eta``. In the global model's steady state the argon is fed and flows out on the
+    refill time ``tau``, the ions return as neutrals, and the wind removes
+    ``eta Gamma A_t / V``, so ``1 - n_Ar / n_fill = eta tau Gamma / (h_r n_fill)``
+    whatever the plasma; equal deficits give
+
+        eta(Gamma) = Delta(Gamma) h_r n_fill / (tau Gamma).
+
+    The result interpolates between the fluxes (`WindEfficiency`) and is for this
+    magnetron's refill time, height and pressure: pass it as its ``wind_efficiency``
+    (``dataclasses.replace(magnetron, wind_efficiency=eta)``). Each flux takes a few
+    seconds with the default gas.
+
+    The gas dynamics is the continuum (Euler) limit. At 1 Pa the mean free path of
+    argon is a few mm, so the Knudsen number of the ionization region is near 1 and a
+    kinetic (DSMC) check of this rarefaction, and so of ``eta``, is still due; the
+    diffusion coefficient, conductivity and side-wall cooling of the default gas are
+    placeholders.
+    """
+    points = np.sort(np.asarray(to_array(fluxes, "m^-2 / s", "fluxes"), float).ravel())
+
+    def default_gas(flux: float) -> GasDynamics:
+        return sputter_wind_gas(magnetron, flux)
+
+    build = default_gas if gas is None else gas
+
+    fill = magnetron.gas_density
+    scale = magnetron.region_height * fill / magnetron.refill_time
+    deficits, efficiencies = [], []
+    for flux in points:
+        model = build(float(flux))
+        state = model.steady_state(tolerance=tolerance, max_time=max_time)
+        deficit = 1.0 - float(np.mean(state.gas_number)) / fill
+        deficits.append(deficit)
+        efficiencies.append(max(deficit, 0.0) * scale / flux)
+    return WindEfficiency(tuple(points), tuple(efficiencies), tuple(deficits))

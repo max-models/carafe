@@ -2,12 +2,12 @@
 
 The global model's sputter wind, with a wind efficiency derived from the compressible gas.
 
-The global model (:class:`wellbalanced.Magnetron`) rarefies the argon with a sputter wind
+The global model (:class:`carafe.Magnetron`) rarefies the argon with a sputter wind
 that pushes ``eta`` argon atoms out of the ionization region per sputtered atom. With a
 constant ``eta = 0.3`` the rarefaction at 100 A is far stronger than that of the argon as a
 compressible gas in front of the target (``examples/sputter_wind_gas_dynamics.py``).
-`wellbalanced.magnetron.wind_efficiency_from_gas_dynamics` runs the gas
-(`wellbalanced.magnetron.sputter_wind_gas`: titanium sputtered cold into 2 cm of argon at 1
+`carafe.magnetron.wind_efficiency_from_gas_dynamics` runs the gas
+(`carafe.magnetron.sputter_wind_gas`: titanium sputtered cold into 2 cm of argon at 1
 Pa, refilled from the far end) to its steady state at six sputtered fluxes and sets
 ``eta(Gamma)`` so that the global model's argon deficit is the gas's mean deficit. The first
 figure is ``eta`` against the discharge current; the second the rarefaction of the global
@@ -26,8 +26,8 @@ import warnings
 import numpy as np
 import plasma_plots
 
-from wellbalanced import MATERIALS, Magnetron
-from wellbalanced.magnetron import sputter_wind_gas, wind_efficiency_from_gas_dynamics
+from carafe import MATERIALS, Magnetron
+from carafe.magnetron import sputter_wind_gas, wind_efficiency_from_gas_dynamics
 
 warnings.filterwarnings("ignore", message=".*placeholders, not data")
 

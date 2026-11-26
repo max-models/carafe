@@ -43,9 +43,9 @@ jobs:
         numerics/global-model/index.html
         numerics/fluid1d/index.html
         numerics/spatial-inductive3d/index.html
-        api/wellbalanced/index.html
-        api/wellbalanced/global_model/index.html
-        api/wellbalanced/fluid1d/index.html
-        api/wellbalanced/neutralizer/index.html
+        api/carafe/index.html
+        api/carafe/global_model/index.html
+        api/carafe/fluid1d/index.html
+        api/carafe/neutralizer/index.html
         tutorials/global-model/global_model.ipynb
         full-examples/argon-global-model/plot-1.png

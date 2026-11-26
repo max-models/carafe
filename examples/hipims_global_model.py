@@ -13,7 +13,7 @@ the self-sputtering share of the sputtered flux and the electron density. First 
 states from 0.1 to 100 A for three targets, then a 100 A, 100 us pulse every millisecond
 on titanium, brought to its periodic state. The sputter and secondary electron yields,
 the geometry, the sputter wind and the heating are placeholders (see
-``wellbalanced.magnetron``): the trends are the model's, the numbers are not data.
+``carafe.magnetron``): the trends are the model's, the numbers are not data.
 """
 
 import warnings
@@ -22,7 +22,7 @@ import numpy as np
 import plasma_plots
 import xarray as xr
 
-from wellbalanced.magnetron import MATERIALS, Magnetron
+from carafe.magnetron import MATERIALS, Magnetron
 
 warnings.filterwarnings("ignore", message=".*placeholders, not data")
 

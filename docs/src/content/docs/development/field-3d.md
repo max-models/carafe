@@ -8,7 +8,7 @@ Yee-type edges on Cartesian grids (staircased or cut-cell conductors, patchwork
 refinement) or Nédélec elements on fitted meshes. This page gives the evidence from a
 first 3D solver with staircased conductors, `InductiveField3D`, measured against
 closed forms and against NGSolve on fitted meshes, and ends with a recommendation.
-The decision is yours. The numbers come from `benchmarks/field3d_r4.py` (wellbalanced)
+The decision is yours. The numbers come from `benchmarks/field3d_r4.py` (carafe)
 and `benchmarks/slotted_cylinder_ngsolve.py` (NGSolve, in a separate environment:
 it is a benchmark, not a dependency). Both write JSON files next to the scripts.
 

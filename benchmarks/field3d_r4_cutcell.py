@@ -1,7 +1,7 @@
 """The slotted cylinder again: surface-impedance conductors on cut cells against staircases.
 
 Step R4's slotted-cylinder test (``field3d_r4.py``, ``slotted_cylinder_case.CASE``) with
-the tube as an :class:`~wellbalanced.spatial.ImpedanceConductor3D` (Leontovich's
+the tube as an :class:`~carafe.spatial.ImpedanceConductor3D` (Leontovich's
 ``E_t = Z_s H x n`` on its surface), its cells cut conformally (simgeometry's
 ``yee_fractions``) or staircased, against NGSolve with the same surface impedance on
 curved meshes fitted to the tube and its slits (``slotted_cylinder_ngsolve_sibc.py``),
@@ -31,7 +31,7 @@ import sys
 import time
 from pathlib import Path
 
-from wellbalanced.spatial import (
+from carafe.spatial import (
     Conductor3D,
     EdgeGrid,
     ImpedanceConductor3D,

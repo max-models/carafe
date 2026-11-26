@@ -10,7 +10,7 @@ warm and hot argon, metastables, ``Ar+``, ``Ar2+``, and copper with ``Cu+`` and 
 The back-attraction probability ``beta_t`` and ``f`` are fitted so that the model's own
 discharge current matches the given one, which is the way the IRM is fitted to a measured
 pulse. Here the "measured" pulse is synthetic (a 100 us pulse rising to 30 A at 550 V), and
-every rate coefficient, yield and the geometry are placeholders (see ``wellbalanced.irm``):
+every rate coefficient, yield and the geometry are placeholders (see ``carafe.irm``):
 the procedure is the IRM's, the numbers are not data. The figure shows the current, the
 densities, the electron temperature and the outputs of the IRM: the share ``alpha_t`` of the
 sputtered atoms that are ionized and return to the target, the ionized flux fraction of the
@@ -22,7 +22,7 @@ import warnings
 import numpy as np
 import plasma_plots
 
-from wellbalanced.irm import IonizationRegion
+from carafe.irm import IonizationRegion
 
 warnings.filterwarnings("ignore", message=".*placeholders, not data")
 

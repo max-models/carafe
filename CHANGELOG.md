@@ -7,6 +7,8 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- Renamed from wellbalanced to carafe: the import is `carafe`, the PyPI package
+  `carafe-plasma`, the repository max-models/carafe and the scope-profiler tag `carafe`.
 - `LocalDispersion` solves the electrons' 2 x 2 momentum balance in closed form and evaluates
   the residual on whole arrays of frequencies: the root search is about 100 times faster
   (a 30-wavenumber scan from 18 s to 0.15 s), with the same roots.
@@ -20,13 +22,13 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-- `GasCoupledDriftFluid` (`wellbalanced.gas_coupling`): `DriftFluid2D` with its neutral gas from
+- `GasCoupledDriftFluid` (`carafe.gas_coupling`): `DriftFluid2D` with its neutral gas from
   `GasDynamics` instead of the fixed `refill_rate`, split on windows: the plasma's window-averaged
   ionization is the gas model's argon sink, the ions reaching the target return as argon from the
   target wall, the ion friction on the gas is optional, and the gas sets the plasma's `N`.
   `examples/spoke_gas_coupled.py` compares it with the relaxation closure on Boeuf's 1D state.
 - `DriftFluid2D(metal=...)`: the sputtered metal in the 2D drift fluid, opt-in (a
-  `TargetMaterial` of `wellbalanced.magnetron`). The ions that hit the cathode sputter
+  `TargetMaterial` of `carafe.magnetron`). The ions that hit the cathode sputter
   `argon_yield` atoms per `Ar+` and `self_yield` per `M+` (self-sputtering); the atoms leave as a
   beam along `x` at `metal_speed`, are ionized by electron impact (the Lotz rate by default, its
   energy an electron energy loss) and by charge exchange with `Ar+`, and their singly charged
@@ -39,11 +41,11 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - A live demo in the docs (Getting started, "Live demo"): Boeuf's gradient-drift dispersion
   relation (`boeuf_dispersion_roots`) solved in the browser with Pyodide, growth rate and phase
   speed against `k_y` with sliders for `B`, `E_0`, `T_e`, `n_0`, `L_n`, `L_B`, `nu` and the grad-B
-  drift (`docs/src/components/wellbalanced_demo.py`). The docs build the wheels it installs, and a
+  drift (`docs/src/components/carafe_demo.py`). The docs build the wheels it installs, and a
   Pyodide workflow imports every module in Pyodide and runs the demo.
 - A wind efficiency that depends on the sputtered flux: `Magnetron(wind_efficiency=...)` takes
   a function `eta(Gamma)` of the sputtered flux at the target as well as a number, and
-  `wellbalanced.magnetron.wind_efficiency_from_gas_dynamics` derives one (`WindEfficiency`,
+  `carafe.magnetron.wind_efficiency_from_gas_dynamics` derives one (`WindEfficiency`,
   interpolated in log-log) from steady states of the compressible gas in front of the target
   (`sputter_wind_gas`), so that the global model's argon deficit is the gas's mean deficit.
   For the placeholder titanium magnetron at 1 Pa, `eta` falls from 0.96 at 1 A to 0.085 at 100
@@ -56,16 +58,16 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   and the argon is at its filling density, the dc particle budgets close (ionization against
   the ion losses, per ion and in total, and the argon budget gives the rarefaction in closed
   form), and the discharge current is the ion current to the target with its secondaries.
-- `wellbalanced.dispersion.eigenmodes`: the nonlocal linear eigenproblem of the gradient-drift
+- `carafe.dispersion.eigenmodes`: the nonlocal linear eigenproblem of the gradient-drift
   instability across a 1D profile (`NonlocalDispersion` on an `Equilibrium`): drift-fluid or
   inertial electrons with collisions, the Padé gyro-averaged electron response, cold ions with
   flow, charge exchange and the ionization coupling, Poisson or quasineutral, the curl-free
   field's compressibility; `Eigenmodes.drift` picks the drift branch and `scan` follows it over
   `k_y`. `Equilibrium.boeuf` is Boeuf's DC magnetron state (`BOEUF_FIGURE_2`, his figure 2
   digitized), `Equilibrium.model_state` a model state at other densities.
-  `examples/nonlocal_eigenmodes.py` shows it on Boeuf's state. `wellbalanced.dispersion` is now a
+  `examples/nonlocal_eigenmodes.py` shows it on Boeuf's state. `carafe.dispersion` is now a
   package; its imports are unchanged.
-- `wellbalanced.irm`: the ionization region model (IRM) of a HiPIMS pulse (Raadu et al. 2011,
+- `carafe.irm`: the ionization region model (IRM) of a HiPIMS pulse (Raadu et al. 2011,
   Huo et al. 2017, Gudmundsson et al. 2022 for copper) as `IonizationRegion`, an own module on
   the `Reaction` framework and the magnetron's rate fits: thermal electrons with an energy
   equation and hot secondary electrons at a fixed temperature, cold, warm and hot argon,
@@ -117,13 +119,13 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   in the order of the models (starlight-theme's `methodcard: { pages: true }`), and a
   Numerics section on each method's API page.
 
-- `wellbalanced.dispersion`: `LocalRoots.drift` keeps the roots of the drift ordering
+- `carafe.dispersion`: `LocalRoots.drift` keeps the roots of the drift ordering
   (`|Re omega| < 0.3 k_y v_E`, `|Im omega| < 0.02 omega_ce`), which separates the gradient-drift
   and lower-hybrid branches from the electron-scale roots (`Re omega ~ 0.3 omega_ce`,
   `gamma ~ 1e7-1e8` /s) the relation also has at weak `B`; `scan` and `scan_profile` follow
   that branch by default (`branch="drift"`, or `"fastest"`) and return every root found as
   `omega_re`, `omega_im` on a `root` dimension, so the branches can be sorted afterwards.
-- `wellbalanced.transport`: the cross-field electron transport of a 2D `(x, y)` run from
+- `carafe.transport`: the cross-field electron transport of a 2D `(x, y)` run from
   the moments its PIC deposits (picnic's `MomentRecorder`): `momentum_budget` evaluates every
   term of the `y`-averaged momentum identity as a flux across `B` (the fluctuation-driven
   `E x B` flux `<n E_y> / B`, split into a spoke band and the rest, the collisional, inertial
@@ -132,7 +134,7 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   resolves the `E x B` flux by azimuthal mode with the phase between potential and density.
   Example `examples/transport_budget.py`.
 
-- `wellbalanced.dispersion`: the local gradient-drift (Simon–Hoh) dispersion relation with
+- `carafe.dispersion`: the local gradient-drift (Simon–Hoh) dispersion relation with
   the electron momentum balance solved exactly (inertia, collisions, flow shear), the
   compressibility of every drift in the model field `B(x) z` by differentiation in `B` and
   `E_0` (and the curl-free, 3D-arch factor 2 as an option), cold or kinetic (plasma dispersion
@@ -146,7 +148,7 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   terms), which the 2D PIC with a varied `L_B` has to decide. Example
   `examples/magnetron_dispersion.py`.
 
-- `wellbalanced.cr` (the `cr` extra): hydrogen and deuterium reaction sets from OpenCR's
+- `carafe.cr` (the `cr` extra): hydrogen and deuterium reaction sets from OpenCR's
   collisional-radiative models (effective ionization, recombination, dissociation and radiative
   energy loss at a given electron density, the H₂⁺/H₃⁺ chemistry), `hydrogen_driver` and
   `deuterium_neutralizer` with them in place of the placeholder rates.
@@ -164,7 +166,7 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   In Boeuf's case the absorbing anode gives his anode-side gradient (L_n -1.6 mm) but drains
   the anode region, and the discharge then runs away at the cathode (a potential well below
   the cathode's potential holding magnetised electrons), absorbing cathode or not.
-- `boeuf_dispersion_roots` (`wellbalanced.driftfluid2d`): Boeuf's local gradient-drift
+- `boeuf_dispersion_roots` (`carafe.driftfluid2d`): Boeuf's local gradient-drift
   relation, Eq. (1) of arXiv:2211.17051 (finite Larmor radius, grad-B drift, Poisson),
   checked against his linear phase (1e7 /s at 1.6 cm, +17 km/s). The linear stability of the
   drift fluid's 1D Boeuf state (gallery study 07) does not reproduce that phase: its leading
@@ -179,7 +181,7 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `ImpedanceConductor3D`: good conductors of the 3D field (`InductiveField3D`) as
   surface-impedance (Leontovich) boundaries on cut cells, step R4 of the RF-driver plan.
   Dey and Mittra's conformal faces with `E_t = Z_s H x n` on the surface's part of their
-  contour, the geometry from simgeometry's `yee_fractions` (`wellbalanced.spatial.cutcell`;
+  contour, the geometry from simgeometry's `yee_fractions` (`carafe.spatial.cutcell`;
   `cut_cells=False` staircases it for comparison). Exact for a plane wall, second order for
   the tube (its loss to 1e-5 at 48 cells across 60 mm); the staircase's surface is too long
   and its loss 22–29 % high on every grid. The slotted cylinder redone with it against
@@ -188,10 +190,10 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   discretisation".
 - `InductiveField3D.solve(solver="iterative")`: COCG with Hiptmair and Xu's auxiliary-space
   preconditioner and a geometric multigrid on the grid's nodes
-  (`wellbalanced.spatial.iterative`), about 40 iterations from 60 000 to 220 000 unknowns
+  (`carafe.spatial.iterative`), about 40 iterations from 60 000 to 220 000 unknowns
   (26 s instead of 320 s for the direct solve at 62 000).
 
-- `NeutralFluid2D` (`wellbalanced.spatial.neutrals`, step R3.5 of the RF-driver plan):
+- `NeutralFluid2D` (`carafe.spatial.neutrals`, step R3.5 of the RF-driver plan):
   the driver's gas as H and H2 Navier–Stokes fluids, each with its density, velocity and
   temperature, the model of Zielke et al. (PSST 31, 035019, 2022, section 2.3): friction
   and energy exchange with the other species (charge exchange with the drifting ions),
@@ -252,7 +254,7 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   from the 1D wall flux (0.61): the electron temperature within 0.1% (test: 1%), the
   densities within 3% (test: 5%), the remainder the presheath drop (about 0.7 T_e where the
   global model counts T_e / 2).
-- `Fluid2D` (`wellbalanced.spatial.fluid`, step R3.3 of the RF-driver plan): the driver
+- `Fluid2D` (`carafe.spatial.fluid`, step R3.3 of the RF-driver plan): the driver
   plasma as a multi-species fluid on the cells of the field's grid, in r–z or in a cut.
   Ion continuity and momentum (inertia, born at rest, drag on the gas from the mobility
   or from a constant mean free path), drift-diffusion electrons with their energy (rates
@@ -322,7 +324,7 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `Fluid1D(volume_sources=...)`: the global model's `VolumeSource`s in 1D, with rates per
   unit density of fluid or fixed species, numbers or arrays on the cells; their electron
   energy appears as `sources` in `energy_balance`.
-- `PatchGrid`: the leaf cells of a patchwork hierarchy as the grid of `wellbalanced.spatial`,
+- `PatchGrid`: the leaf cells of a patchwork hierarchy as the grid of `carafe.spatial`,
   with `CellGrid`'s interface (fields over the leaf cells, shape `(n,)`): `refined` (boxes or
   a function per level), `from_edges` (about as fine as a tensor grid, for comparisons),
   `refined_where` (one level finer where a field is large, e.g. the skin layer).
@@ -334,7 +336,7 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `CellGrid.dims`, `.locate` and `.wall_cells`; `PlasmaRegion.wall_faces` goes through the
   grid (periodic seams are no walls now).
 
-- `wellbalanced.spatial`: the spatially resolved models in one subpackage, on one cell
+- `carafe.spatial`: the spatially resolved models in one subpackage, on one cell
   grid (`CellGrid`: edges, centres, cell volumes and face areas, the x–y or r–z metric,
   shape masks and the curl-curl operator; the only place the geometry enters).
 - `InductiveField2D(geometry="cylindrical")`: the axisymmetric `A_phi(r, z)`, coil loops,
@@ -380,13 +382,13 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   by `x^2/12`, noise in the residual of a fine mesh). Newton converges quadratically again
   with an energy equation and ion momentum; the `Fluid1D` tests run in a fifth of the time.
 - `InductiveField2D`, `InductiveSolution`, `Winding`, `Conductor` moved from
-  `wellbalanced.inductive` to `wellbalanced.spatial` (still exported by `wellbalanced`);
+  `carafe.inductive` to `carafe.spatial` (still exported by `carafe`);
   powers are per volume element (`cell_volumes`), `depth` is optional (an r–z solution has
   none).
-- simgeometry is an optional dependency (`wellbalanced[spatial]`, and the test and docs
+- simgeometry is an optional dependency (`carafe-plasma[spatial]`, and the test and docs
   extras): the spatial models take any shape with `contains_points` and do not import it.
 
-- `RFDriver` (`wellbalanced.driver`): a 0D RF driver, the `GlobalModel` of its plasma
+- `RFDriver` (`carafe.driver`): a 0D RF driver, the `GlobalModel` of its plasma
   coupled to a transformer model of the coil (Piejak, Godyak and Alexandrovich 1992;
   Lieberman and Lichtenberg sec. 12.2) with the cold collisional plasma's complex skin
   depth, so the collisional and the electron-inertia limits are one expression; Nagaoka's
@@ -395,7 +397,7 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   power and RF power transfer efficiency for an absorbed power, and scans over the power,
   frequency or geometry in seconds. `illustrative_hydrogen_driver` (BUG geometry, H2 at
   0.3 Pa) runs on placeholder rates and warns. Example `rf_driver_0d.py`.
-- `InductiveField2D` (`wellbalanced.inductive`): the magnetoquasistatic `A_z` of coil
+- `InductiveField2D` (`carafe.inductive`): the magnetoquasistatic `A_z` of coil
   windings, grounded or floating perfect conductors and a prescribed cold plasma
   (`sigma = n_e e^2 / (m_e (nu + i omega))`) in a 2D Cartesian cut, on stretched
   tensor-product grids; time-harmonic (`solve`, one sparse LU per frequency) and
@@ -413,11 +415,11 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   between steps.
 - `Species` and `Reaction`, with rates from plasmacoll cross sections, rate tables,
   constants or functions.
-- `wellbalanced.neutralizer`: a beam-driven plasma neutralizer; the beam's charge
+- `carafe.neutralizer`: a beam-driven plasma neutralizer; the beam's charge
   states from plasmacoll on gas and plasma targets, its sources (stripped electrons,
   captures, gas ionization) for a global model of the channel, gas flow at the gas
   temperature, a fixed point; illustrative deuterium placeholders that warn.
-- `DriftFluid2D` (`wellbalanced.driftfluid2d`): a 2D axial-azimuthal drift-fluid model of a
+- `DriftFluid2D` (`carafe.driftfluid2d`): a 2D axial-azimuthal drift-fluid model of a
   magnetron (magnetised electrons with the Hall tensor, inertial ions, neutral depletion
   and refill, the electron energy with elastic, ionization and excitation losses
   (implicit), full Poisson with an implicit permittivity, SSP-RK3) for the gradient-drift
@@ -431,7 +433,7 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   T_e, ionization or gas response (checked against the dispersion relation and a time-domain run).
   Diagnostic switches: `diamagnetic`, `heating_scale`, `anode_thermal_flux` (off: it does not
   settle), and `floor_added`, the density the floors create.
-- `GasDynamics` (`wellbalanced.gasdynamics`): a two-species (argon and sputtered metal)
+- `GasDynamics` (`carafe.gasdynamics`): a two-species (argon and sputtered metal)
   compressible neutral gas in 1D or 2D (axial and periodic azimuthal): MUSCL and HLLC with
   SSP-RK3, the diffusion of the metal through the argon and optional heat conduction
   applied implicitly, boundaries (walls, a fill-gas reservoir, outflow, periodic) that emit
@@ -443,9 +445,9 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `to_dataset()` on every result and `stack` for scans: labelled xarray datasets.
 - Examples (an argon global model, a 1D argon discharge, a neutralizer scan), plotted with
   plasma-plots, and a tutorial.
-- Opt-in scope-profiler regions (`wellbalanced.<Class>.<method>`) on the solves, time
-  steps and runs of every model, tagged `wellbalanced`: off unless an application enables
-  the tag (`setup(enable_tags=["wellbalanced"])`, `SCOPE_PROFILER_ENABLE_TAGS` or
+- Opt-in scope-profiler regions (`carafe.<Class>.<method>`) on the solves, time
+  steps and runs of every model, tagged `carafe`: off unless an application enables
+  the tag (`setup(enable_tags=["carafe"])`, `SCOPE_PROFILER_ENABLE_TAGS` or
   `scope-profiler run --enable-tag`). scope-profiler is a new dependency.
 
 ### Removed

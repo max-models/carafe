@@ -14,8 +14,8 @@ import time
 
 import numpy as np
 
-from wellbalanced import DriftFluid2D
-from wellbalanced.driftfluid2d import exponential_field
+from carafe import DriftFluid2D
+from carafe.driftfluid2d import exponential_field
 
 BOLTZMANN = 1.380649e-23
 GAP, PERIOD, PRESSURE, B_MAX = 0.02, 0.08, 0.6, 0.12

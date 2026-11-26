@@ -2,20 +2,20 @@
 
 The BUG driver in r–z as a 2D fluid heated by its inductive field.
 
-Step R3.3 of the RF-driver plan: :class:`wellbalanced.spatial.Fluid2D`, the driver plasma as
+Step R3.3 of the RF-driver plan: :class:`carafe.spatial.Fluid2D`, the driver plasma as
 a multi-species fluid (electrons, H+, H2+ and H3+ in a fixed H2 and H background at
 0.3 Pa), on the cells of the r–z field of :mod:`examples.rf_driver_rz` (six coil turns at
 1 MHz, the backplates as conductors). The ions have inertia and a constant mean free path,
 the electrons drift and diffuse and carry their energy, the potential is quasi-neutral with
 sheath walls; the plasma is the driver cylinder (radius 12 cm, 17 cm long), its open end a
-wall, as the chamber of :class:`wellbalanced.RFDriver`'s global model. It computes:
+wall, as the chamber of :class:`carafe.RFDriver`'s global model. It computes:
 
 1. the fluid with a uniform 25 kW against the global model: the fluid loses its ions
    faster, because the global model applies Lieberman and Lichtenberg's edge-to-centre
    ratio to the mean density; with the fluid's own edge-to-mean ratio the global model
    gives the fluid's plasma;
-2. the fluid in its field at 25 kW absorbed (:func:`wellbalanced.spatial.fluid_plasma`
-   with :class:`wellbalanced.spatial.DriverCoupling`), against the global model's plasma
+2. the fluid in its field at 25 kW absorbed (:func:`carafe.spatial.fluid_plasma`
+   with :class:`carafe.spatial.DriverCoupling`), against the global model's plasma
    in the same field and the 0D transformer model;
 3. the RF Lorentz force of that field, ``-(e/2) Re(u x B*)`` per electron, which pushes
    the electrons away from the coil: as an equivalent field it is several times the
@@ -39,10 +39,10 @@ import numpy as np
 from plasmacoll.constants import ELEMENTARY_CHARGE
 from simgeometry import Circle, Rectangle
 
-from wellbalanced.driver import illustrative_hydrogen_driver
-from wellbalanced.fluid1d import FluidSpecies
-from wellbalanced.global_model import Chamber, GlobalModel
-from wellbalanced.spatial import (
+from carafe.driver import illustrative_hydrogen_driver
+from carafe.fluid1d import FluidSpecies
+from carafe.global_model import Chamber, GlobalModel
+from carafe.spatial import (
     CellGrid,
     Conductor,
     DriverCoupling,

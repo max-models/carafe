@@ -1,9 +1,9 @@
 ---
 title: Quickstart
-description: A global model and a 1D discharge with wellbalanced.
+description: A global model and a 1D discharge with carafe.
 ---
 
-First, ensure that `wellbalanced` is [installed](/wellbalanced/getting-started/installation/).
+First, ensure that `carafe` is [installed](/carafe/getting-started/installation/).
 
 ## A global model
 
@@ -16,7 +16,7 @@ import astropy.units as u
 from plasmacoll import CrossSection
 from plasmacoll.constants import ELECTRON_MASS
 
-from wellbalanced import ELECTRON, Chamber, GlobalModel, Reaction, Species
+from carafe import ELECTRON, Chamber, GlobalModel, Reaction, Species
 
 argon, argon_ion = Species.atomic("Ar", 39.948), Species.atomic("Ar+", 39.948, 1)
 ionization = Reaction.from_cross_section(
@@ -55,7 +55,7 @@ dataset along its parameter:
 ```python
 import plasma_plots  # registers the .plasma accessor
 
-from wellbalanced import stack
+from carafe import stack
 
 powers = [50.0, 100.0, 200.0]
 scan = stack(model.scan("power", powers), "power", powers, units="W")
@@ -69,7 +69,7 @@ The same reaction in a slab between two grounded walls, sustained by uniform hea
 ```python
 import numpy as np
 
-from wellbalanced import Fluid1D, FluidSpecies
+from carafe import Fluid1D, FluidSpecies
 
 model = Fluid1D(
     species=[
@@ -109,9 +109,9 @@ its field at 25 kW absorbed:
 import numpy as np
 from simgeometry import Rectangle
 
-from wellbalanced.driver import illustrative_hydrogen_driver
-from wellbalanced.fluid1d import FluidSpecies
-from wellbalanced.spatial import (
+from carafe.driver import illustrative_hydrogen_driver
+from carafe.fluid1d import FluidSpecies
+from carafe.spatial import (
     CellGrid,
     DriverCoupling,
     Fluid2D,
@@ -164,7 +164,7 @@ does not converge yet. `Fluid2D` runs on a tensor `CellGrid` or on a `PatchGrid`
 or not: all levels take one implicit step, every leaf face carries one flux (the state
 patchwork's refluxing restores), and particles and energy are conserved to round-off across
 levels. The full example is
-[the BUG driver in r–z](/wellbalanced/full-examples/rf-driver-fluid2d/).
+[the BUG driver in r–z](/carafe/full-examples/rf-driver-fluid2d/).
 
 ## A neutralizer
 
@@ -172,7 +172,7 @@ A fast beam's charge states on the gas and on the plasma it makes, with that pla
 global model of the channel:
 
 ```python
-from wellbalanced.neutralizer import illustrative_deuterium_neutralizer
+from carafe.neutralizer import illustrative_deuterium_neutralizer
 
 model = illustrative_deuterium_neutralizer()  # placeholder numbers: it warns
 result = model.solve()
@@ -192,7 +192,7 @@ from Knudsen diffusion or from a kinetic run (picnic's `NeutralParticleTransport
 
 ```python
 from plasmacoll.constants import ATOMIC_MASS
-from wellbalanced.neutralizer import GasProfile
+from carafe.neutralizer import GasProfile
 
 gas = GasProfile.knudsen(
     3.0, 0.1, 1.7, 4.028 * ATOMIC_MASS, inflow=2e21, temperature=0.03
@@ -201,12 +201,12 @@ result = illustrative_deuterium_neutralizer(gas_profile=gas).solve()
 print(result.line_density, result.neutral_fraction, result.plasma_potential)
 ```
 
-See the [API reference](/wellbalanced/api/wellbalanced/) for every class and function.
+See the [API reference](/carafe/api/carafe/) for every class and function.
 
 ## Rates from OpenCR
 
 The illustrative driver and neutralizer use placeholder rates. With the `cr` extra
-(`pip install "wellbalanced[cr]"`), `wellbalanced.cr` builds the hydrogen reactions from
+(`pip install "carafe-plasma[cr]"`), `carafe.cr` builds the hydrogen reactions from
 [OpenCR](https://max-models.github.io/opencr/)'s collisional-radiative models: the
 ionization and recombination of H through its excited levels, the ionization and
 dissociation of H₂ through its vibrational levels, the electron energy lost to radiation,
@@ -214,7 +214,7 @@ and the H₂⁺/H₃⁺ chemistry. The effective rates depend on the electron de
 taken at one `electron_density` near the solution's:
 
 ```python
-from wellbalanced.cr import deuterium_neutralizer, hydrogen_driver
+from carafe.cr import deuterium_neutralizer, hydrogen_driver
 
 driver = hydrogen_driver(electron_density=1e18)  # the BUG driver with OpenCR's rates
 state = driver.solve(20e3)

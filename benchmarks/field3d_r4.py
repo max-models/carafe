@@ -1,7 +1,7 @@
 """The evidence for the 3D field's discretisation: staircased edges against references.
 
 The three tests of step R4 of the RF-driver plan with
-:class:`~wellbalanced.spatial.InductiveField3D` (edges of a uniform Cartesian grid,
+:class:`~carafe.spatial.InductiveField3D` (edges of a uniform Cartesian grid,
 conductors staircased: an edge conducts if its midpoint is inside), under grid
 refinement:
 
@@ -19,7 +19,7 @@ refinement:
 - ``tube3d``: the finite tube with four slits, none, closed or through, against NGSolve
   (``slotted_cylinder_ngsolve.py 3d``).
 
-Run ``python benchmarks/field3d_r4.py [parts]`` with wellbalanced and simgeometry
+Run ``python benchmarks/field3d_r4.py [parts]`` with carafe and simgeometry
 installed (``OMP_NUM_THREADS=2``; ``tube3d`` takes about 15 minutes, the rest a few
 minutes). It writes ``benchmarks/field3d_r4.json`` and prints the tables of
 ``docs/src/content/docs/development/field-3d.md``.
@@ -36,9 +36,9 @@ import numpy as np
 import simgeometry as sg
 from scipy.constants import mu_0 as MU_0
 
-from wellbalanced.driver import nagaoka_coefficient
-from wellbalanced.spatial import Coil3D, Conductor3D, EdgeGrid, InductiveField3D
-from wellbalanced.tests.unit.test_inductive3d import tube_in_box
+from carafe.driver import nagaoka_coefficient
+from carafe.spatial import Coil3D, Conductor3D, EdgeGrid, InductiveField3D
+from carafe.tests.unit.test_inductive3d import tube_in_box
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))

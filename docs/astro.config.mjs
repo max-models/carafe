@@ -1,42 +1,42 @@
 // @ts-check
 // The shared max-models docs setup (@max-models/starlight-theme): served at
-// https://max-models.github.io/wellbalanced/, with math, the API reference and a link check.
+// https://max-models.github.io/carafe/, with math, the API reference and a link check.
 import { defineDocs } from '@max-models/starlight-theme';
 
 export default defineDocs({
-	repo: 'wellbalanced',
-	title: 'wellbalanced',
+	repo: 'carafe',
+	title: 'carafe',
 	description: 'Global (0D) and 1D fluid models of low-temperature plasmas.',
-	pythonPackage: 'wellbalanced',
+	pythonPackage: 'carafe',
 	// the method cards: a Numerics section with the overview (numerics/index.mdx) and one page per
 	// module, in the order of the model, and a Numerics section on each method's API page
 	methodcard: {
 		pages: true,
 		index: false,
 		labels: {
-			'wellbalanced.reactions': 'Reactions',
-			'wellbalanced.global_model': 'Global model',
-			'wellbalanced.cr': 'OpenCR rates',
-			'wellbalanced.neutralizer': 'Neutralizer',
-			'wellbalanced.driver': 'RF driver (0D)',
-			'wellbalanced.magnetron': 'Magnetron',
-			'wellbalanced.irm': 'Ionization region model',
-			'wellbalanced.fluid1d': 'Fluid 1D',
-			'wellbalanced.spatial.grid': 'Cell grid',
-			'wellbalanced.spatial.fluid': 'Fluid 2D',
-			'wellbalanced.spatial.inductive': 'Inductive field 2D',
-			'wellbalanced.spatial.edges': 'Edge grid',
-			'wellbalanced.spatial.cutcell': 'Cut cells',
-			'wellbalanced.spatial.inductive3d': 'Inductive field 3D',
-			'wellbalanced.spatial.iterative': 'Iterative solver',
-			'wellbalanced.spatial.coupling': 'Field and plasma',
-			'wellbalanced.spatial.neutrals': 'Neutral gas 2D',
-			'wellbalanced.driftfluid2d': 'Drift fluid 2D',
-			'wellbalanced.dispersion': 'Local dispersion',
-			'wellbalanced.dispersion.eigenmodes': 'Nonlocal eigenmodes',
-			'wellbalanced.gasdynamics': 'Gas dynamics',
-			'wellbalanced.gas_coupling': 'Gas and drift fluid',
-			'wellbalanced.transport': 'Transport budget',
+			'carafe.reactions': 'Reactions',
+			'carafe.global_model': 'Global model',
+			'carafe.cr': 'OpenCR rates',
+			'carafe.neutralizer': 'Neutralizer',
+			'carafe.driver': 'RF driver (0D)',
+			'carafe.magnetron': 'Magnetron',
+			'carafe.irm': 'Ionization region model',
+			'carafe.fluid1d': 'Fluid 1D',
+			'carafe.spatial.grid': 'Cell grid',
+			'carafe.spatial.fluid': 'Fluid 2D',
+			'carafe.spatial.inductive': 'Inductive field 2D',
+			'carafe.spatial.edges': 'Edge grid',
+			'carafe.spatial.cutcell': 'Cut cells',
+			'carafe.spatial.inductive3d': 'Inductive field 3D',
+			'carafe.spatial.iterative': 'Iterative solver',
+			'carafe.spatial.coupling': 'Field and plasma',
+			'carafe.spatial.neutrals': 'Neutral gas 2D',
+			'carafe.driftfluid2d': 'Drift fluid 2D',
+			'carafe.dispersion': 'Local dispersion',
+			'carafe.dispersion.eigenmodes': 'Nonlocal eigenmodes',
+			'carafe.gasdynamics': 'Gas dynamics',
+			'carafe.gas_coupling': 'Gas and drift fluid',
+			'carafe.transport': 'Transport budget',
 		},
 	},
 	nav: [
@@ -45,7 +45,7 @@ export default defineDocs({
 		{ label: 'Full examples', link: '/full-examples/' },
 		{ label: 'Numerics', link: '/numerics/' },
 		{ label: 'Development', link: '/development/docs/' },
-		{ label: 'API', link: '/api/wellbalanced/' },
+		{ label: 'API', link: '/api/carafe/' },
 	],
 	sidebar: [
 		{

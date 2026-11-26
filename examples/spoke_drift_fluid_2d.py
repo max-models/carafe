@@ -2,13 +2,13 @@
 
 Verification of the 2D drift fluid: a uniform state, the E x B drift and a linear instability.
 
-Three checks of :class:`wellbalanced.DriftFluid2D` against theory, each in seconds:
+Three checks of :class:`carafe.DriftFluid2D` against theory, each in seconds:
 
 1. a state uniform along ``y`` stays uniform to round-off (the symmetry of the scheme);
 2. a passive density blob in a uniform ``E`` and ``B`` drifts at ``E/B`` along ``y``;
 3. in a uniform plasma periodic in ``x`` and ``y`` an azimuthal perturbation grows with the
    growth rate and the frequency of the full-Poisson local dispersion relation
-   (:func:`wellbalanced.driftfluid2d.uniform_plasma_roots`).
+   (:func:`carafe.driftfluid2d.uniform_plasma_roots`).
 
 The Boeuf-case science (spokes, seeds, scans) is in the magnetron gallery, not here.
 """
@@ -16,8 +16,8 @@ The Boeuf-case science (spokes, seeds, scans) is in the magnetron gallery, not h
 import matplotlib.pyplot as plt
 import numpy as np
 
-from wellbalanced import DriftFluid2D
-from wellbalanced.driftfluid2d import (
+from carafe import DriftFluid2D
+from carafe.driftfluid2d import (
     exponential_field,
     fit_mode,
     uniform_plasma_roots,

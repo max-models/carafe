@@ -49,14 +49,14 @@ from pathlib import Path
 import numpy as np
 import simgeometry as sg
 
-from wellbalanced.spatial import (
+from carafe.spatial import (
     EdgeGrid,
     Feed3D,
     ImpedanceConductor3D,
     InductiveField3D,
     inductive3d,
 )
-from wellbalanced.spatial.cutcell import CutCells
+from carafe.spatial.cutcell import CutCells
 
 HERE = Path(__file__).resolve().parent
 PATH = HERE / "rnet_driver.json"

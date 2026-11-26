@@ -18,10 +18,10 @@ import numpy as np
 import plasma_plots
 import xarray as xr
 
-from wellbalanced import DriftFluid2D, GasDynamics
-from wellbalanced.driftfluid2d import exponential_field
-from wellbalanced.gas_coupling import GasCoupledDriftFluid
-from wellbalanced.gasdynamics import Boundary
+from carafe import DriftFluid2D, GasDynamics
+from carafe.driftfluid2d import exponential_field
+from carafe.gas_coupling import GasCoupledDriftFluid
+from carafe.gasdynamics import Boundary
 
 BOLTZMANN = 1.380649e-23
 GAP, PERIOD, PRESSURE, B_MAX = 0.02, 0.08, 0.6, 0.12

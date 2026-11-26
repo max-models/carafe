@@ -2,7 +2,7 @@
 
 A density pattern ``n = n_0(x) (1 + 0.3 cos(k y))`` and a potential pattern shifted against
 it by a phase, in the plane of the axial-azimuthal simulations, built so that the electron
-momentum balance holds exactly; :mod:`wellbalanced.transport` then recovers the flux across
+momentum balance holds exactly; :mod:`carafe.transport` then recovers the flux across
 ``B`` term by term: the ``E x B`` flux of the correlated fluctuations (all of it in the
 spoke band here), the collisional flux, the stress term, and a residual at the level of
 the finite differences. The second panel shows the loop identity, ``<n E_y> = <phi d_y n>``,
@@ -15,7 +15,7 @@ import numpy as np
 import xarray as xr
 from plasmacoll.constants import ELECTRON_MASS, ELEMENTARY_CHARGE
 
-from wellbalanced.transport import loop_identity, mode_fluxes, momentum_budget
+from carafe.transport import loop_identity, mode_fluxes, momentum_budget
 
 B, NU, LY, LX = 0.02, 2e7, 0.08, 0.02
 
