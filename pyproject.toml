@@ -23,7 +23,7 @@ dependencies = [
   "methodcard",
   "numpy",
   "plasmacoll>=0.6.0",
-  "scope-profiler>=0.7.5",
+  "scope-profiler>=0.8.0",
   "scipy",
   "xarray",
 ]
