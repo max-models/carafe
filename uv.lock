@@ -314,7 +314,7 @@ css = [
 ]
 
 [[package]]
-name = "carafe-plasma"
+name = "plasma-carafe"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
@@ -388,7 +388,7 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "astropy", marker = "extra == 'test'" },
-    { name = "carafe-plasma", extras = ["docs", "test"], marker = "extra == 'dev'" },
+    { name = "plasma-carafe", extras = ["docs", "test"], marker = "extra == 'dev'" },
     { name = "griffe", marker = "extra == 'docs'" },
     { name = "ipykernel", marker = "extra == 'docs'" },
     { name = "jupyterlab", marker = "extra == 'dev'" },

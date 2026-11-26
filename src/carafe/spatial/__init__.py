@@ -18,7 +18,7 @@ split of carafe moves as a whole (the magnetron's
 `carafe.DriftFluid2D` is a candidate to join it then).
 
 Shapes are anything with ``contains_points`` (simgeometry shapes, an optional
-dependency: ``pip install "carafe-plasma[spatial]"``); simgeometry is imported only for the
+dependency: ``pip install "plasma-carafe[spatial]"``); simgeometry is imported only for the
 cut cells of surface-impedance conductors (`carafe.spatial.cutcell`). patchwork, for `carafe.spatial.patches.PatchGrid`, is in the
 same extra and imported when a patch grid is made.
 """

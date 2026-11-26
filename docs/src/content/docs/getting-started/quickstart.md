@@ -206,7 +206,7 @@ See the [API reference](/carafe/api/carafe/) for every class and function.
 ## Rates from OpenCR
 
 The illustrative driver and neutralizer use placeholder rates. With the `cr` extra
-(`pip install "carafe-plasma[cr]"`), `carafe.cr` builds the hydrogen reactions from
+(`pip install "plasma-carafe[cr]"`), `carafe.cr` builds the hydrogen reactions from
 [OpenCR](https://max-models.github.io/opencr/)'s collisional-radiative models: the
 ionization and recombination of H through its excited levels, the ionization and
 dissociation of H₂ through its vibrational levels, the electron energy lost to radiation,

@@ -8,8 +8,8 @@
 analysis](https://github.com/max-models/carafe/actions/workflows/static_analysis.yml/badge.svg)](https://github.com/max-models/carafe/actions/workflows/static_analysis.yml)
 [![Docs](https://github.com/max-models/carafe/actions/workflows/docs.yml/badge.svg)](https://max-models.github.io/carafe/)
 [![codecov](https://codecov.io/gh/max-models/carafe/branch/main/graph/badge.svg)](https://codecov.io/gh/max-models/carafe)
-[![PyPI](https://img.shields.io/pypi/v/carafe-plasma.png)](https://pypi.org/project/carafe-plasma/)
-[![Python](https://img.shields.io/pypi/pyversions/carafe-plasma.png)](https://pypi.org/project/carafe-plasma/)
+[![PyPI](https://img.shields.io/pypi/v/plasma-carafe.png)](https://pypi.org/project/plasma-carafe/)
+[![Python](https://img.shields.io/pypi/pyversions/plasma-carafe.png)](https://pypi.org/project/plasma-carafe/)
 
 Global (0D) and 1D fluid models of low-temperature plasmas.
 
@@ -72,7 +72,7 @@ Global (0D) and 1D fluid models of low-temperature plasmas.
   given power and the RF power transfer efficiency. `DriverCoupling`
   closes the loop with a power-dependent plasma (a global model’s or
   `Fluid2D`’s) at a set absorbed or generator power. Shapes come from
-  simgeometry (`pip install "carafe-plasma[spatial]"`, which also
+  simgeometry (`pip install "plasma-carafe[spatial]"`, which also
   installs [patchwork](https://github.com/max-models/patchwork), on PyPI
   as `patchwork-amr`). On a tensor grid stretched toward the far
   boundary, or on refined patches (`PatchGrid`): a coarse base out to

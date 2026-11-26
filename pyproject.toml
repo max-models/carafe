@@ -3,7 +3,7 @@ build-backend = "setuptools.build_meta"
 requires = [ "setuptools", "wheel" ]
 
 [project]
-name = "carafe-plasma"
+name = "plasma-carafe"
 version = "0.1.0"
 description = "Global (0D), 1D and 2D fluid and RF-field models of low-temperature plasmas."
 readme = "README.md"
@@ -34,7 +34,7 @@ optional-dependencies.dev = [
   "pyproject-fmt",
   "pyright",
   "ruff",
-  "carafe-plasma[docs,test]",
+  "plasma-carafe[docs,test]",
 ]
 optional-dependencies.docs = [
   "griffe",

@@ -51,7 +51,7 @@ def _opencr() -> Any:
         import opencr
     except ImportError as error:  # pragma: no cover - the cr extra is installed in CI
         raise ImportError(
-            "OpenCR is needed: pip install 'carafe-plasma[cr]'"
+            "OpenCR is needed: pip install 'plasma-carafe[cr]'"
         ) from error
     return opencr
 

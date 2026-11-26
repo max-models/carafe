@@ -8,7 +8,7 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 
 - Renamed from wellbalanced to carafe: the import is `carafe`, the PyPI package
-  `carafe-plasma`, the repository max-models/carafe and the scope-profiler tag `carafe`.
+  `plasma-carafe`, the repository max-models/carafe and the scope-profiler tag `carafe`.
 - `LocalDispersion` solves the electrons' 2 x 2 momentum balance in closed form and evaluates
   the residual on whole arrays of frequencies: the root search is about 100 times faster
   (a 30-wavenumber scan from 18 s to 0.15 s), with the same roots.
@@ -385,7 +385,7 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `carafe.inductive` to `carafe.spatial` (still exported by `carafe`);
   powers are per volume element (`cell_volumes`), `depth` is optional (an r–z solution has
   none).
-- simgeometry is an optional dependency (`carafe-plasma[spatial]`, and the test and docs
+- simgeometry is an optional dependency (`plasma-carafe[spatial]`, and the test and docs
   extras): the spatial models take any shape with `contains_points` and do not import it.
 
 - `RFDriver` (`carafe.driver`): a 0D RF driver, the `GlobalModel` of its plasma

@@ -15,7 +15,7 @@ Layouts: `PatchGrid.refined` from boxes per level (or a function of the cell
 centres), `PatchGrid.from_edges` as fine as a tensor grid everywhere (for
 comparisons), `PatchGrid.refined_where` one level finer where a field is large
 (the skin layer of a solution, say). patchwork is an optional dependency
-(``pip install "carafe-plasma[spatial]"``), imported when a grid is made.
+(``pip install "plasma-carafe[spatial]"``), imported when a grid is made.
 """
 
 from __future__ import annotations
