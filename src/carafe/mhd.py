@@ -76,7 +76,7 @@ ranks): place the patches with ``placement="morton"`` or ``"balanced"``.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -91,7 +91,7 @@ from carafe.limiters import LIMITERS
 if TYPE_CHECKING:
     from patchwork import AMRHierarchy, Patch
 
-__all__ = ["CONSERVED", "MHD2D", "hlld_flux"]
+__all__ = ["CONSERVED", "MHD2D", "harris_sheets", "hlld_flux", "sheet_diagnostics"]
 
 #: Halo width of every field: two cells for the MUSCL stencil of a face.
 HALO = 2
@@ -1076,3 +1076,106 @@ class MHD2D:
             coords=coords,
             attrs={"time": self.time, "level": level, "gamma": self.gamma},
         )
+
+
+# Reconnection: two Harris sheets in a periodic box ----------------------------------#
+
+
+def harris_sheets(
+    hierarchy: AMRHierarchy,
+    *,
+    width: float,
+    beta: float = 0.2,
+    perturbation: float = 1e-3,
+    noise: float = 0.0,
+    seed: int = 0,
+) -> dict[str, Any]:
+    """Two Harris current sheets at ``y = Ly / 4`` and ``3 Ly / 4`` of a periodic box.
+
+    Returns the arguments of `MHD2D.set_state` (functions of ``x, y``; pass them as
+    ``model.set_state(**state)``), so a model can
+    take them again on a regridded hierarchy, whose patches then resolve the sheets
+    instead of interpolating them from the base level.
+
+    ``B_x = tanh((y - y1) / w) - tanh((y - y2) / w) - 1`` (unit field, ``|B_x| = 1`` far
+    from the sheets, the sheets of opposite current), uniform density 1 and the pressure
+    of the balance ``p + B_x^2 / 2 = (1 + beta) / 2``, so the Alfvén speed is 1 and the
+    Lundquist number of a sheet of the box's length is ``S = Lx / eta``. The sheets are
+    perturbed by ``perturbation`` times the box's longest mode in the potential (one
+    X-point per sheet) and, with ``noise``, by random modes up to a tenth of the length
+    (a seed for plasmoids).
+    """
+    (x0, x1), (y0, y1) = hierarchy.bounds
+    lx, ly = x1 - x0, y1 - y0
+    first, second = y0 + 0.25 * ly, y0 + 0.75 * ly
+    rng = np.random.default_rng(seed)
+    modes = np.arange(2, 11)
+    phases = rng.uniform(0.0, 2.0 * np.pi, (2, modes.size))
+    amplitudes = noise * rng.standard_normal((2, modes.size)) / modes
+
+    def potential(x, y):
+        # B_x = dA/dy; the sheets' B_x has zero mean over y, so A is periodic
+        a = width * (
+            np.log(np.cosh((y - first) / width)) - np.log(np.cosh((y - second) / width))
+        ) - (y - y0)
+        for sheet, (centre, sign) in enumerate(((first, 1.0), (second, -1.0))):
+            shape = np.exp(-(((y - centre) / (2.0 * width)) ** 2))
+            wave = perturbation * np.cos(2.0 * np.pi * (x - x0) / lx)
+            for mode, phase, amp in zip(
+                modes, phases[sheet], amplitudes[sheet], strict=True
+            ):
+                wave = wave + amp * np.cos(2.0 * np.pi * mode * (x - x0) / lx + phase)
+            a = a + sign * wave * shape
+        return a
+
+    def pressure(x, y):
+        bx = np.tanh((y - first) / width) - np.tanh((y - second) / width) - 1.0
+        return 0.5 * (1.0 + beta) - 0.5 * bx * bx
+
+    return {
+        "density": 1.0,
+        "velocity": (0.0, 0.0, 0.0),
+        "pressure": pressure,
+        "vector_potential": potential,
+    }
+
+
+def sheet_diagnostics(
+    model: MHD2D, leaf: Mapping[str, np.ndarray] | None = None
+) -> dict:
+    """The reconnected flux and the plasmoids of the lower sheet of `harris_sheets`.
+
+    Along the line ``y = Ly / 4``: the reconnected flux ``psi = (1/2) int |B_y| dx`` (per
+    unit length out of the plane), the number of O-points (where ``B_y`` changes sign
+    from positive to negative along ``x``: field lines close around them) and of
+    X-points, and the largest ``|J_z|`` in the box. ``leaf``: the `MHD2D.leaf_values`
+    already computed.
+    """
+    mesh = model.hierarchy
+    leaf = model.leaf_values() if leaf is None else leaf
+    (x0, x1), (y0, y1) = mesh.bounds
+    line = y0 + 0.25 * (y1 - y0)
+    finest = mesh.spacing(mesh.max_level)[0]
+    from patchwork import CompositeCells
+
+    cells = CompositeCells(mesh)
+    x = x0 + (np.arange(round((x1 - x0) / finest)) + 0.5) * finest
+    # the cells on both sides of the line, averaged
+    below = cells.locate(np.array([x, np.full_like(x, line - 1e-9)]))
+    above = cells.locate(np.array([x, np.full_like(x, line + 1e-9)]))
+    by = 0.5 * (leaf["magnetic_field_y"][below] + leaf["magnetic_field_y"][above])
+    psi = 0.5 * float(np.sum(np.abs(by)) * finest)
+    sign = np.sign(by)
+    turns = sign * np.roll(sign, -1) < 0
+    # with B_x growing across the sheet (B_x = dA/dy), A has a maximum at an O-point:
+    # B_y = -dA/dx turns from positive to negative there
+    o_points = int(np.sum(turns & (sign > 0)))
+    x_points = int(np.sum(turns & (sign < 0)))
+    return {
+        "time": model.time,
+        "psi": psi,
+        "o_points": o_points,
+        "x_points": x_points,
+        "max_current": float(np.max(np.abs(leaf["current_z"]))),
+        "leaf_cells": int(leaf["density"].size),
+    }
