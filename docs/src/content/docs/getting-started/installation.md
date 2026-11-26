@@ -1,6 +1,6 @@
 ---
 title: Installation
-description: Create a Python environment and install wellbalanced.
+description: Create a Python environment and install carafe.
 ---
 
 Create and activate a Python environment:

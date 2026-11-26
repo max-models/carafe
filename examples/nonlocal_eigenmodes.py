@@ -2,7 +2,7 @@
 
 The gradient-drift instability on the 1D state of Boeuf's DC magnetron (arXiv:2211.17051,
 figure 2) as an eigenvalue problem across the whole profile, with
-:class:`wellbalanced.dispersion.NonlocalDispersion`:
+:class:`carafe.dispersion.NonlocalDispersion`:
 
 1. growth rate and phase speed of the drift branch against the azimuthal wavelength (an
    8 cm box, ``m = 1-12``), with the drift-fluid electrons and with the gyro-averaged
@@ -15,7 +15,7 @@ figure 2) as an eigenvalue problem across the whole profile, with
 import matplotlib.pyplot as plt
 import numpy as np
 
-from wellbalanced.dispersion import Equilibrium, NonlocalDispersion
+from carafe.dispersion import Equilibrium, NonlocalDispersion
 
 equilibrium = Equilibrium.boeuf(np.linspace(3e-3, 0.02, 150))
 m = np.arange(1, 13)

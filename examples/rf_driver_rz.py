@@ -8,23 +8,23 @@ Sci. Technol. 31, 035019, 2022, Fig. 1(b), dimensions read off the figure): the 
 plasma grid at 42 cm), the driver and source backplates and the expansion wall as
 perfect conductors, the plasma grid as the right edge of the domain, the surroundings up
 to r = 50 cm; six coil turns (6 mm tubes) around the driver, 1 MHz,
-``R_net = 0.6`` Ohm. With :class:`wellbalanced.spatial.InductiveField2D` in r–z (no
+``R_net = 0.6`` Ohm. With :class:`carafe.spatial.InductiveField2D` in r–z (no
 2D-to-3D depth) this computes:
 
 1. the coil current and the RF power transfer efficiency at 25 kW absorbed, for a
    prescribed plasma (peak 1e18 m^-3, 10 eV) with (a) cold electrons and (b) the
    collisional viscosity of the paper's eq. 7, against steps R1 (x–y cut) and R2 (0D);
-2. (c) the global model of :func:`wellbalanced.driver.illustrative_hydrogen_driver` in
-   this field (:func:`wellbalanced.spatial.global_model_plasma` on the same shape) at the
+2. (c) the global model of :func:`carafe.driver.illustrative_hydrogen_driver` in
+   this field (:func:`carafe.spatial.global_model_plasma` on the same shape) at the
    paper's operating point, 60 kW from the generator at 0.3 Pa, where they report
    ``I_RF ≈ 250 A`` and ``eta ≈ 60 %`` (model and measurement).
 
 Everything runs on two grids: a tensor grid of 1 mm cells over the source, stretched
-toward the far boundary, and refined patches (:class:`wellbalanced.spatial.PatchGrid`, on
+toward the far boundary, and refined patches (:class:`carafe.spatial.PatchGrid`, on
 patchwork): a 4 mm base out to the far boundary, 2 mm over the source and its
 conductors, 1 mm over the coil and the driver's skin layer. The patches give the same
 numbers with about a third of the cells; one more level where the cold plasma absorbs
-(:meth:`~wellbalanced.spatial.PatchGrid.refined_where`) shows the skin layer resolved.
+(:meth:`~carafe.spatial.PatchGrid.refined_where`) shows the skin layer resolved.
 
 Still missing for the paper's model: the RF Lorentz force, which pushes the plasma off
 the coil (it needs the in-plane electron flux of ``Fluid2D``), the plasma and neutral
@@ -40,8 +40,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 from simgeometry import Circle, Rectangle
 
-from wellbalanced.driver import illustrative_hydrogen_driver
-from wellbalanced.spatial import (
+from carafe.driver import illustrative_hydrogen_driver
+from carafe.spatial import (
     Conductor,
     DriverCoupling,
     InductiveField2D,

@@ -15,9 +15,9 @@ meshes fitted to the tube and its slits; the problems of ``benchmarks/field3d_r4
   vector potential in 2D.
 
 The coil is the same ``J = curl T`` (the load vector ``int T . curl v`` over the coil's
-box) and the gauge the same small regularisation as in wellbalanced.
+box) and the gauge the same small regularisation as in carafe.
 
-NGSolve is a benchmark, not a dependency of wellbalanced: run this in a separate
+NGSolve is a benchmark, not a dependency of carafe: run this in a separate
 environment (``pip install ngsolve``), e.g.::
 
     python -m venv ../.external/fem-venv && ../.external/fem-venv/bin/pip install ngsolve

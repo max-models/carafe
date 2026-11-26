@@ -4,9 +4,9 @@ The sputter wind: the argon in front of a sputtering target, as a compressible g
 
 The target of a magnetron is a wall in front of a gas at 1 Pa that emits sputtered metal atoms
 and, at the same time, the ions that hit it return as neutrals. Here only the sputtered
-titanium is emitted, at the flux the global model (:class:`wellbalanced.Magnetron`) finds for a
+titanium is emitted, at the flux the global model (:class:`carafe.Magnetron`) finds for a
 discharge current of 1 to 100 A on a target of 10 cm^2, into 2 cm of argon that is refilled
-from a reservoir at the far end (`wellbalanced.gasdynamics`, the argon and the titanium as one
+from a reservoir at the far end (`carafe.gasdynamics`, the argon and the titanium as one
 compressible gas with one velocity and temperature and the diffusion of the titanium through
 the argon). Two cases of the energy of the sputtered atoms: cold atoms (they leave at the gas
 temperature, as the global model assumes: only their number and momentum push the gas) and
@@ -36,8 +36,8 @@ import plasma_plots
 import xarray as xr
 from plasmacoll.constants import ATOMIC_MASS, BOLTZMANN
 
-from wellbalanced import MATERIALS, Magnetron
-from wellbalanced.gasdynamics import (
+from carafe import MATERIALS, Magnetron
+from carafe.gasdynamics import (
     ARGON_MASS,
     Boundary,
     GasDynamics,

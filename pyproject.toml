@@ -3,7 +3,7 @@ build-backend = "setuptools.build_meta"
 requires = [ "setuptools", "wheel" ]
 
 [project]
-name = "wellbalanced"
+name = "plasma-carafe"
 version = "0.1.0"
 description = "Global (0D), 1D and 2D fluid and RF-field models of low-temperature plasmas."
 readme = "README.md"
@@ -34,7 +34,7 @@ optional-dependencies.dev = [
   "pyproject-fmt",
   "pyright",
   "ruff",
-  "wellbalanced[docs,test]",
+  "plasma-carafe[docs,test]",
 ]
 optional-dependencies.docs = [
   "griffe",
@@ -56,10 +56,10 @@ optional-dependencies.test = [
   "pytest-cov",
   "simgeometry>=0.2.1",
 ]
-urls.Source = "https://github.com/max-models/wellbalanced"
+urls.Source = "https://github.com/max-models/carafe"
 
 [project.entry-points."scope_profiler.opt_in_tags"]
-wellbalanced = "wellbalanced"
+carafe = "carafe"
 
 [tool.setuptools]
 package-data."*" = [ "py.typed" ]
@@ -91,7 +91,7 @@ ini_options.markers = [ "convergence: an order-of-accuracy test of a method card
 
 [tool.coverage]
 run.omit = [ "*/tests/*" ]
-run.source = [ "wellbalanced" ]
+run.source = [ "carafe" ]
 report.show_missing = true
 
 # PRs to devel test against the devel branches of the max-models packages (pinned in

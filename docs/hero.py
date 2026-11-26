@@ -15,7 +15,7 @@ from plasma_plots.hero import HeroFigure
 from plasmacoll import CrossSection
 from plasmacoll.constants import ELECTRON_MASS
 
-from wellbalanced import ELECTRON, Fluid1D, FluidSpecies, Reaction, Species
+from carafe import ELECTRON, Fluid1D, FluidSpecies, Reaction, Species
 
 OUTPUT = Path(__file__).parent / "src" / "assets" / "hero.svg"
 PERIOD = 12.0  # seconds for the evolution to play once

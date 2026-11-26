@@ -1,6 +1,6 @@
 """Gradient-drift instability with kinetic ions.
 
-The local dispersion relation of :mod:`wellbalanced.dispersion` at the parameters of the
+The local dispersion relation of :mod:`carafe.dispersion` at the parameters of the
 ionisation region of a DC magnetron, in three views:
 
 1. growth rate and phase speed against the wavenumber, cold against kinetic ions: the fast
@@ -8,15 +8,15 @@ ionisation region of a DC magnetron, in three views:
 2. the compressibility of the drifts: the growth rate against the field gradient length for
    the 2D model field ``B(x) z`` (``1 / L_n - 1 / L_B``) and a curl-free field
    (``1 / L_n - 2 / L_B``), which is stable for ``L_n > L_B / 2``;
-3. the comparison with Boeuf's relation (:func:`wellbalanced.driftfluid2d.boeuf_dispersion_roots`)
+3. the comparison with Boeuf's relation (:func:`carafe.driftfluid2d.boeuf_dispersion_roots`)
    at his point: the grad-B terms decide, and the 2D PIC with a varied ``L_B`` is the test.
 """
 
 import matplotlib.pyplot as plt
 import numpy as np
 
-from wellbalanced.dispersion import ColdIons, KineticIons, LocalDispersion, Plasma
-from wellbalanced.driftfluid2d import boeuf_dispersion_roots
+from carafe.dispersion import ColdIons, KineticIons, LocalDispersion, Plasma
+from carafe.driftfluid2d import boeuf_dispersion_roots
 
 fig, axes = plt.subplots(1, 3, figsize=(12, 3.6))
 

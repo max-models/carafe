@@ -2,7 +2,7 @@
 
 The same geometry as ``slotted_cylinder_ngsolve.py`` (``slotted_cylinder_case.CASE``),
 with the tube removed from the mesh and Leontovich's condition ``E_t = Z_s H x n`` on its
-surface, ``Z_s = (1 + i) / (sigma delta)``: the model of wellbalanced's
+surface, ``Z_s = (1 + i) / (sigma delta)``: the model of carafe's
 ``ImpedanceConductor3D``, so that the comparison isolates the discretisation (cut cells
 or staircase against Nedelec elements on curved meshes fitted to the tube and its
 slits). Weak form, ``n`` the surface normal::

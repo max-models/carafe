@@ -23,7 +23,7 @@ balancing its own gas and beam (``Neutralizer.local_plasma``: a plasma that does
 the channel, with no losses through the ends) peaks upstream of the feed, where the D- that
 make the electrons are, and its potential dips where the gas is densest. The cross sections and
 rates are illustrative placeholders, not data (see
-``wellbalanced.neutralizer.illustrative_deuterium_neutralizer``).
+``carafe.neutralizer.illustrative_deuterium_neutralizer``).
 """
 
 import dataclasses
@@ -35,8 +35,8 @@ import plasma_plots
 import xarray as xr
 from plasmacoll.constants import ATOMIC_MASS
 
-from wellbalanced import stack
-from wellbalanced.neutralizer import (
+from carafe import stack
+from carafe.neutralizer import (
     FastBeam,
     GasProfile,
     illustrative_deuterium_neutralizer,

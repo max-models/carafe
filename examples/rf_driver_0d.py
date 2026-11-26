@@ -2,7 +2,7 @@
 
 A 0D RF driver: coil current and RF power transfer efficiency in seconds.
 
-:class:`wellbalanced.RFDriver` couples a global model of the driver's hydrogen plasma
+:class:`carafe.RFDriver` couples a global model of the driver's hydrogen plasma
 to a transformer model of the coil (Piejak, Godyak and Alexandrovich 1992; Lieberman
 and Lichtenberg sec. 12.2): the absorbed power fixes the electron density and
 temperature, those fix the skin layer and the resistance the coil sees, and that the
@@ -28,7 +28,7 @@ import warnings
 import matplotlib.pyplot as plt
 import numpy as np
 
-from wellbalanced.driver import illustrative_hydrogen_driver
+from carafe.driver import illustrative_hydrogen_driver
 
 with warnings.catch_warnings():
     warnings.simplefilter("ignore", UserWarning)  # the placeholder-data warning, once

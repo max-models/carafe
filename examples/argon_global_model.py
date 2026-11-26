@@ -8,7 +8,7 @@ elastic losses, ions leaving at the Bohm speed. The particle balance alone sets 
 electron temperature, which falls with the pressure; the power balance then sets the
 density. Magnetic cusps that cover most of the wall lower both the losses and the
 electron temperature. The cross sections are illustrative step functions, not
-argon data. Every scan is one xarray dataset (:func:`wellbalanced.stack`), plotted
+argon data. Every scan is one xarray dataset (:func:`carafe.stack`), plotted
 with plasma-plots.
 """
 
@@ -18,7 +18,7 @@ import xarray as xr
 from plasmacoll import CrossSection
 from plasmacoll.constants import BOLTZMANN, ELECTRON_MASS
 
-from wellbalanced import ELECTRON, Chamber, Cusp, GlobalModel, Reaction, Species, stack
+from carafe import ELECTRON, Chamber, Cusp, GlobalModel, Reaction, Species, stack
 
 argon = Species.atomic("Ar", 39.948)
 argon_ion = Species.atomic("Ar+", 39.948, 1)

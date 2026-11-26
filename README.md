@@ -1,15 +1,15 @@
-# wellbalanced
+# carafe
 
 
 <!-- README.md is generated from README.qmd: edit the .qmd and run `make readme`. -->
 
-[![Tests](https://github.com/max-models/wellbalanced/actions/workflows/test_pytest.yml/badge.svg)](https://github.com/max-models/wellbalanced/actions/workflows/test_pytest.yml)
+[![Tests](https://github.com/max-models/carafe/actions/workflows/test_pytest.yml/badge.svg)](https://github.com/max-models/carafe/actions/workflows/test_pytest.yml)
 [![Static
-analysis](https://github.com/max-models/wellbalanced/actions/workflows/static_analysis.yml/badge.svg)](https://github.com/max-models/wellbalanced/actions/workflows/static_analysis.yml)
-[![Docs](https://github.com/max-models/wellbalanced/actions/workflows/docs.yml/badge.svg)](https://max-models.github.io/wellbalanced/)
-[![codecov](https://codecov.io/gh/max-models/wellbalanced/branch/main/graph/badge.svg)](https://codecov.io/gh/max-models/wellbalanced)
-[![PyPI](https://img.shields.io/pypi/v/wellbalanced.png)](https://pypi.org/project/wellbalanced/)
-[![Python](https://img.shields.io/pypi/pyversions/wellbalanced.png)](https://pypi.org/project/wellbalanced/)
+analysis](https://github.com/max-models/carafe/actions/workflows/static_analysis.yml/badge.svg)](https://github.com/max-models/carafe/actions/workflows/static_analysis.yml)
+[![Docs](https://github.com/max-models/carafe/actions/workflows/docs.yml/badge.svg)](https://max-models.github.io/carafe/)
+[![codecov](https://codecov.io/gh/max-models/carafe/branch/main/graph/badge.svg)](https://codecov.io/gh/max-models/carafe)
+[![PyPI](https://img.shields.io/pypi/v/plasma-carafe.png)](https://pypi.org/project/plasma-carafe/)
+[![Python](https://img.shields.io/pypi/pyversions/plasma-carafe.png)](https://pypi.org/project/plasma-carafe/)
 
 Global (0D) and 1D fluid models of low-temperature plasmas.
 
@@ -35,51 +35,50 @@ Global (0D) and 1D fluid models of low-temperature plasmas.
   number, phase velocity against E x B, cathode modulation, potential
   hump).
 - **A global model of the magnetron ionization region** (`Magnetron`,
-  `wellbalanced.magnetron`): Ar and the sputtered metal, Bohm losses
-  through the target with sputtering and self-sputtering, argon refill
-  and sputter wind, driven by the discharge current and voltage of a
-  pulse or of dc; it reports the argon rarefaction, the metal to argon
-  ratio, the metal share of the ion flux and the self-sputtering share
-  against the current. Yields and geometry are placeholders, not data.
+  `carafe.magnetron`): Ar and the sputtered metal, Bohm losses through
+  the target with sputtering and self-sputtering, argon refill and
+  sputter wind, driven by the discharge current and voltage of a pulse
+  or of dc; it reports the argon rarefaction, the metal to argon ratio,
+  the metal share of the ion flux and the self-sputtering share against
+  the current. Yields and geometry are placeholders, not data.
 - **The neutral gas of a magnetron** (`GasDynamics`,
-  `wellbalanced.gasdynamics`): argon and the sputtered metal as one
+  `carafe.gasdynamics`): argon and the sputtered metal as one
   compressible gas in 1D or 2D (HLLC, species diffusion, heat
   conduction), with the sputter wind, the return of neutralized ions,
   ionization sinks, wall heat exchange and a refill reservoir as inputs
   a plasma model can update; the rarefaction that spokes depend on. The
   continuum limit, so Knudsen numbers near 1 need a kinetic check.
-- **Neutralizers** (`wellbalanced.neutralizer`): the gas neutralizer of
-  ITER’s injectors and the beam-driven plasma neutralizer studied for
-  DEMO (magnetic cusps confining the plasma the beam makes, `Cusp`): a
-  fast beam’s charge states on the gas and on the plasma it makes,
-  coupled to a global model of the channel fed by the beam’s stripped
-  and secondary electrons, iterated to a fixed point in seconds. The
-  beam’s sources are functions of its local flux, energy and charge
-  states, with cross sections that may depend on the energy and
-  secondary electrons of the mean energy of their distribution
-  (e.g. Rudd’s, from plasmacoll); the same sources drive a `Fluid1D`
-  across the channel, whose average over the width reproduces the global
-  model (electron temperature within 0.1%, densities within 3%). The gas
-  along the channel is a `GasProfile`: Knudsen diffusion from the feed
-  to the open ends, or the profile of a kinetic run such as picnic’s
-  `NeutralParticleTransport`; every axial slice’s own plasma comes from
-  `Neutralizer.local_plasma`.
+- **Neutralizers** (`carafe.neutralizer`): the gas neutralizer of ITER’s
+  injectors and the beam-driven plasma neutralizer studied for DEMO
+  (magnetic cusps confining the plasma the beam makes, `Cusp`): a fast
+  beam’s charge states on the gas and on the plasma it makes, coupled to
+  a global model of the channel fed by the beam’s stripped and secondary
+  electrons, iterated to a fixed point in seconds. The beam’s sources
+  are functions of its local flux, energy and charge states, with cross
+  sections that may depend on the energy and secondary electrons of the
+  mean energy of their distribution (e.g. Rudd’s, from plasmacoll); the
+  same sources drive a `Fluid1D` across the channel, whose average over
+  the width reproduces the global model (electron temperature within
+  0.1%, densities within 3%). The gas along the channel is a
+  `GasProfile`: Knudsen diffusion from the feed to the open ends, or the
+  profile of a kinetic run such as picnic’s `NeutralParticleTransport`;
+  every axial slice’s own plasma comes from `Neutralizer.local_plasma`.
 - **The inductive RF field of a driver** (`InductiveField2D`,
-  `wellbalanced.spatial`): the magnetoquasistatic vector potential of
-  coil windings, perfect conductors (backplates, electromagnetic
-  shields) and a prescribed plasma in a 2D Cartesian cut or in r–z, with
-  cold electrons or with the collisional electron viscosity,
-  time-harmonic or (cold) time-dependent; the absorbed power, the coil
-  current for a given power and the RF power transfer efficiency.
-  `DriverCoupling` closes the loop with a power-dependent plasma (a
-  global model’s or `Fluid2D`’s) at a set absorbed or generator power.
-  Shapes come from simgeometry (`pip install "wellbalanced[spatial]"`,
-  which also installs
-  [patchwork](https://github.com/max-models/patchwork), on PyPI as
-  `patchwork-amr`). On a tensor grid stretched toward the far boundary,
-  or on refined patches (`PatchGrid`): a coarse base out to the far
-  boundary and fine patches only over the coil and the skin layer.
-- **The driver plasma in 2D** (`Fluid2D`, `wellbalanced.spatial`): a
+  `carafe.spatial`): the magnetoquasistatic vector potential of coil
+  windings, perfect conductors (backplates, electromagnetic shields) and
+  a prescribed plasma in a 2D Cartesian cut or in r–z, with cold
+  electrons or with the collisional electron viscosity, time-harmonic or
+  (cold) time-dependent; the absorbed power, the coil current for a
+  given power and the RF power transfer efficiency. `DriverCoupling`
+  closes the loop with a power-dependent plasma (a global model’s or
+  `Fluid2D`’s) at a set absorbed or generator power. Shapes come from
+  simgeometry (`pip install "plasma-carafe[spatial]"`, which also
+  installs [patchwork](https://github.com/max-models/patchwork), on PyPI
+  as `patchwork-amr`). On a tensor grid stretched toward the far
+  boundary, or on refined patches (`PatchGrid`): a coarse base out to
+  the far boundary and fine patches only over the coil and the skin
+  layer.
+- **The driver plasma in 2D** (`Fluid2D`, `carafe.spatial`): a
   multi-species fluid on the field’s cells, in r–z or in a cut: ion
   continuity and momentum (inertia, drag on the gas), drift-diffusion
   electrons with their energy, a quasi-neutral potential with sheath
@@ -90,19 +89,19 @@ Global (0D) and 1D fluid models of low-temperature plasmas.
   step of all levels, one flux per leaf face, so particles and energy
   are conserved to round-off across levels (what patchwork’s refluxing
   restores).
-- **The driver’s gas** (`NeutralFluid2D`, `wellbalanced.spatial`): H and
-  H2 as two Navier–Stokes fluids (density, velocity and temperature
-  each; the model of Zielke et al., PSST 31, 035019, 2022) on the
-  plasma’s cells, with the plasma’s reactions (dissociation, ionization,
-  Franck–Condon heating), collisions with the ions (charge exchange) and
-  kinetic walls: atoms recombining with a probability, ions coming back
-  as gas, a gas inlet and a grid of some transparency. `couple_neutrals`
+- **The driver’s gas** (`NeutralFluid2D`, `carafe.spatial`): H and H2 as
+  two Navier–Stokes fluids (density, velocity and temperature each; the
+  model of Zielke et al., PSST 31, 035019, 2022) on the plasma’s cells,
+  with the plasma’s reactions (dissociation, ionization, Franck–Condon
+  heating), collisions with the ions (charge exchange) and kinetic
+  walls: atoms recombining with a probability, ions coming back as gas,
+  a gas inlet and a grid of some transparency. `couple_neutrals`
   iterates it with `Fluid2D` to a common steady state, so the gas thins
   and heats where the plasma is.
-- **A 0D RF driver** (`RFDriver`, `wellbalanced.driver`): the global
-  model of the driver plasma coupled to a transformer model of the coil,
-  giving the coil current and the RF power transfer efficiency against
-  the absorbed power, the frequency and the geometry in seconds, for an
+- **A 0D RF driver** (`RFDriver`, `carafe.driver`): the global model of
+  the driver plasma coupled to a transformer model of the coil, giving
+  the coil current and the RF power transfer efficiency against the
+  absorbed power, the frequency and the geometry in seconds, for an
   optimiser. No shields and no neighbouring drivers: those are the 2D
   field’s part.
 - **The data of the kinetic codes**: rates come from
@@ -111,10 +110,11 @@ Global (0D) and 1D fluid models of low-temperature plasmas.
   collisions use, so a fluid and a kinetic model of the same plasma
   differ in their physics, not their data.
 
-The name: a *well-balanced* scheme keeps the steady states of its
-equations exactly, and steady balances are what this code is for.
+The name: picnic carries the particles, carafe the fluid; a carafe is a
+vessel of fluid, and balances over the volume of a vessel are where this
+code started.
 
-Documentation: <https://max-models.github.io/wellbalanced/>
+Documentation: <https://max-models.github.io/carafe/>
 
 ## Example
 
@@ -122,7 +122,7 @@ Documentation: <https://max-models.github.io/wellbalanced/>
 from plasmacoll import CrossSection
 from plasmacoll.constants import ELECTRON_MASS
 
-from wellbalanced import ELECTRON, Chamber, GlobalModel, Reaction, Species
+from carafe import ELECTRON, Chamber, GlobalModel, Reaction, Species
 
 argon, argon_ion = Species.atomic("Ar", 39.948), Species.atomic("Ar+", 39.948, 1)
 ionization = Reaction.from_cross_section(
@@ -170,18 +170,18 @@ The solves, time steps and runs (`GlobalModel.steady_state` and
 `evolve`, `Fluid1D`’s Newton solves, the `step` and `run` of
 `GasDynamics` and `DriftFluid2D`, `Neutralizer.solve`, …) carry
 [scope-profiler](https://github.com/max-models/scope-profiler) regions
-named `wellbalanced.<Class>.<method>`. They are off by default (a region
-that is off costs about 0.1 µs per call); an application that profiles
-itself turns them on with the opt-in tag `wellbalanced`:
+named `carafe.<Class>.<method>`. They are off by default (a region that
+is off costs about 0.1 µs per call); an application that profiles itself
+turns them on with the opt-in tag `carafe`:
 
 ``` python
 import scope_profiler as sp
 
-sp.setup(enable_tags=["wellbalanced"])  # or session(enable_tags=...)
+sp.setup(enable_tags=["carafe"])  # or session(enable_tags=...)
 ```
 
-or, without changing the code, `SCOPE_PROFILER_ENABLE_TAGS=wellbalanced`
-or `scope-profiler run --enable-tag wellbalanced script.py`.
+or, without changing the code, `SCOPE_PROFILER_ENABLE_TAGS=carafe` or
+`scope-profiler run --enable-tag carafe script.py`.
 
 ## Development
 
@@ -211,7 +211,7 @@ Node 22 or newer.
 make docs-install     # npm packages and the Python docs extra
 make docs-notebooks   # execute tutorials/*.ipynb and convert them to pages
 make docs-examples    # run examples/*.py and publish their plots
-make docs-dev         # live preview at http://localhost:4321/wellbalanced/
+make docs-dev         # live preview at http://localhost:4321/carafe/
 make docs-build       # the static site in docs/dist
 ```
 
@@ -227,10 +227,9 @@ make readme
 ## Releases
 
 Before merging a release to `main`, update the version in
-`pyproject.toml`, `src/wellbalanced/__init__.py` and `CITATION.cff`
-(including its release date), and add the release notes to
-`CHANGELOG.md`. The push to `main` creates a GitHub release with a
-`vX.Y.Z` tag and publishes the package to PyPI with trusted publishing
-(OIDC). The one-time PyPI and GitHub configuration is described in the
-[publishing
-tutorial](https://max-models.github.io/wellbalanced/development/publishing/).
+`pyproject.toml`, `src/carafe/__init__.py` and `CITATION.cff` (including
+its release date), and add the release notes to `CHANGELOG.md`. The push
+to `main` creates a GitHub release with a `vX.Y.Z` tag and publishes the
+package to PyPI with trusted publishing (OIDC). The one-time PyPI and
+GitHub configuration is described in the [publishing
+tutorial](https://max-models.github.io/carafe/development/publishing/).

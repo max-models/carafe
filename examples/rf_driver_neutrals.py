@@ -2,12 +2,12 @@
 
 The BUG driver's gas: H and H2 as Navier–Stokes fluids, depleted and heated by the plasma.
 
-Step R3.5 of the RF-driver plan: :class:`wellbalanced.spatial.NeutralFluid2D`, the neutral
+Step R3.5 of the RF-driver plan: :class:`carafe.spatial.NeutralFluid2D`, the neutral
 model of Zielke et al. (PSST 31, 035019, 2022, section 2.3), coupled to the driver plasma
-of :class:`wellbalanced.spatial.Fluid2D` by :func:`wellbalanced.spatial.couple_neutrals`.
+of :class:`carafe.spatial.Fluid2D` by :func:`carafe.spatial.couple_neutrals`.
 The driver is the r–z cylinder of :mod:`examples.rf_driver_fluid2d` (radius 12 cm, 17 cm
 long), uniformly heated (no field here: the field coupling is
-:func:`wellbalanced.spatial.fluid_plasma`); H2 comes in through the backplate near the
+:func:`carafe.spatial.fluid_plasma`); H2 comes in through the backplate near the
 axis at the rate that fills the driver to 0.3 Pa at 300 K without plasma, and both
 species leave through the open end (the expansion region, here a grid of transparency
 0.3); the atoms recombine on the walls with a probability of 0.1, the ions come back as
@@ -18,7 +18,7 @@ is, the atoms (Franck–Condon fragments, charge exchange with the drifting ions
 hotter than the molecules, and the plasma's density follows.
 
 Every rate is a placeholder: the plasma's reactions are those of
-:func:`wellbalanced.driver.illustrative_hydrogen_driver` (constant cross sections), the
+:func:`carafe.driver.illustrative_hydrogen_driver` (constant cross sections), the
 neutral collisions hard spheres (H2–H2 of the size that gives H2's viscosity at 300 K),
 the wall probability, transparency and Franck–Condon energies round numbers; the grid
 is coarse (2 cm). The numbers show the model working, not the BUG driver.
@@ -31,10 +31,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 from plasmacoll.constants import BOLTZMANN, ELEMENTARY_CHARGE
 
-from wellbalanced import ELECTRON, WallReaction
-from wellbalanced.driver import illustrative_hydrogen_driver
-from wellbalanced.fluid1d import FluidSpecies
-from wellbalanced.spatial import (
+from carafe import ELECTRON, WallReaction
+from carafe.driver import illustrative_hydrogen_driver
+from carafe.fluid1d import FluidSpecies
+from carafe.spatial import (
     CellGrid,
     Collision,
     Fluid2D,
@@ -45,7 +45,7 @@ from wellbalanced.spatial import (
     couple_neutrals,
     hard_sphere,
 )
-from wellbalanced.spatial.neutrals import ROOM_TEMPERATURE
+from carafe.spatial.neutrals import ROOM_TEMPERATURE
 
 E = ELEMENTARY_CHARGE
 KELVIN = BOLTZMANN / E

@@ -4,9 +4,9 @@ description: The gradient-drift dispersion relation of a magnetron, by three mod
 ---
 
 import PyodideDemo from '@max-models/starlight-theme/components/PyodideDemo.astro';
-import code from '../../../components/wellbalanced_demo.py?raw';
+import code from '../../../components/carafe_demo.py?raw';
 
-This page runs wellbalanced in your browser with [Pyodide](https://pyodide.org) (Python compiled
+This page runs carafe in your browser with [Pyodide](https://pyodide.org) (Python compiled
 to WebAssembly): nothing is installed and nothing is sent to a server. Move the sliders to solve
 the dispersion relation again.
 
@@ -43,7 +43,7 @@ on, it grows fast only while |<i>L</i><sub>n</sub>| is below about |<i>L</i><sub
 The model selector compares three local relations at the same parameters:
 
 - Boeuf: Boeuf's relation above, cold fluid ions, the fastest root.
-- 2D field: the local theory of `wellbalanced.dispersion` (`LocalDispersion` with `KineticIons` and
+- 2D field: the local theory of `carafe.dispersion` (`LocalDispersion` with `KineticIons` and
   Poisson's equation), in the 2D model field <i>B</i>(<i>x</i>) **z** of the planar simulations:
   room-temperature Maxwellian ions with Landau damping, electron inertia and collisions kept
   exactly, the compressibility of every drift taken from the field gradient. Its drift fluid counts
@@ -62,7 +62,7 @@ The same scan as a script:
 ```python
 import numpy as np
 
-from wellbalanced.driftfluid2d import boeuf_dispersion_roots
+from carafe.driftfluid2d import boeuf_dispersion_roots
 
 k = np.linspace(20.0, 3000.0, 150)  # 1/m
 roots = [boeuf_dispersion_roots(kk, 0.8e15, -2200.0, 6e-3, 11.4, -2.2e-3, -6e-3, 2e7) for kk in k]
@@ -71,5 +71,5 @@ print(f"{growth.max():.3g} /s at a wavelength of {2 * np.pi / k[growth.argmax()]
 ```
 
 The full local theory, with kinetic ions and the compressibility of the drifts, is
-`wellbalanced.dispersion`; the nonlocal eigenmodes across a profile are in
-`wellbalanced.dispersion.eigenmodes`.
+`carafe.dispersion`; the nonlocal eigenmodes across a profile are in
+`carafe.dispersion.eigenmodes`.

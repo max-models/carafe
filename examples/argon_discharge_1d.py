@@ -15,7 +15,7 @@ import plasma_plots
 from plasmacoll import CrossSection
 from plasmacoll.constants import ELECTRON_MASS
 
-from wellbalanced import ELECTRON, Fluid1D, FluidSpecies, Reaction, Species
+from carafe import ELECTRON, Fluid1D, FluidSpecies, Reaction, Species
 
 argon_ion = Species.atomic("Ar+", 39.948, 1)
 ionization = Reaction.from_cross_section(
