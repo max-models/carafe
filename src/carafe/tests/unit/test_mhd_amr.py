@@ -145,3 +145,34 @@ def test_a_negative_resistivity_is_refused() -> None:
     mesh = AMRHierarchy((8, 8), periodic=(True, True))
     with pytest.raises(ValueError, match="resistivity"):
         MHD2D(mesh, resistivity=-1.0)
+
+
+def test_reconnection_on_patches_follows_the_uniform_mesh() -> None:
+    from carafe.mhd import harris_sheets, sheet_diagnostics
+
+    def run(shape, levels):
+        mesh = AMRHierarchy(shape, bounds=((0, 4), (0, 2)), periodic=(True, True))
+        state = harris_sheets(mesh, width=0.1, perturbation=0.05)
+        model = MHD2D(mesh, resistivity=4e-3)
+        model.set_state(**state)
+        for _ in range(levels):
+            model.regrid(model.current_tags(0.5, levels=levels), buffer=1)
+            model.set_state(**state)
+        first = sheet_diagnostics(model)
+        while model.time < 0.2:
+            if levels and model.steps % 5 == 0:
+                model.regrid(model.current_tags(0.5, levels=levels), buffer=1)
+            model.step(min(model.stable_step(), 0.2 - model.time))
+        return first, sheet_diagnostics(model), model
+
+    first, refined, model = run((32, 16), 1)
+    start, uniform, _ = run((64, 32), 0)
+    assert model.hierarchy.max_level == 1
+    assert refined["leaf_cells"] < 0.75 * uniform["leaf_cells"]
+    # one X-point and one island per sheet from the longest mode
+    assert (first["o_points"], first["x_points"]) == (1, 1)
+    assert abs(first["psi"] - start["psi"]) < 1e-3 * start["psi"]
+    # the flux changes (the perturbed sheet relaxes, then tears), alike on both meshes
+    change = abs(uniform["psi"] - start["psi"])
+    assert change > 1e-2 * start["psi"]
+    assert abs(refined["psi"] - uniform["psi"]) < 0.05 * change

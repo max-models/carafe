@@ -36,6 +36,11 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   integrals kept, `A_z` interpolated so div B stays zero on the composite mesh) and
   `leaf_values` (the primitive variables and `J_z` on the leaf cells). Tests on refined and
   regridded patches, resistive decay, and under mpirun the results of one rank.
+- `harris_sheets` and `sheet_diagnostics` (`carafe.mhd`): two Harris sheets in a periodic
+  box (a seed mode and optional noise), the reconnected flux and the O- and X-points of a
+  sheet. `examples/plasmoid_reconnection.py` runs them on regridded patches and on the
+  uniform mesh of the finest level and compares the flux, the cells and the cost per step
+  (`--production`: S = 4e4 and three levels, for plasmoid chains).
 
 - `GasCoupledDriftFluid` (`carafe.gas_coupling`): `DriftFluid2D` with its neutral gas from
   `GasDynamics` instead of the fixed `refill_rate`, split on windows: the plasma's window-averaged
