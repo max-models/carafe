@@ -38,7 +38,8 @@ optional-dependencies.dev = [
 ]
 optional-dependencies.docs = [
   "griffe",
-  "plasma-plots>=0.2.5",
+  "kaleido",
+  "plasma-plots[web]>=0.3.0",
   "ipykernel",
   "matplotlib>=3.10.9",
   "nbclient>=0.11",
