@@ -324,7 +324,7 @@ class MHD2D:
             raise ValueError("MHD2D needs a 2D hierarchy")
         if not all(hierarchy.periodic):
             raise ValueError("MHD2D supports periodic boxes only (both axes periodic)")
-        if hierarchy.cylindrical or hierarchy.graded:
+        if hierarchy.cylindrical or getattr(hierarchy, "graded", False):
             raise ValueError("MHD2D needs a uniform Cartesian hierarchy")
         if limiter not in LIMITERS:
             raise ValueError(
