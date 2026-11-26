@@ -35,6 +35,7 @@ jobs:
         tutorials/fluid-1d/index.html
         tutorials/rf-driver/index.html
         tutorials/spoke-model/index.html
+        tutorials/mhd/index.html
         full-examples/index.html
         full-examples/argon-global-model/index.html
         full-examples/argon-discharge-1d/index.html
