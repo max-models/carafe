@@ -24,6 +24,10 @@ electrons, `DriverCoupling`, that field with a power-dependent plasma, and
 `InductiveField3D`, the field in 3D on the edges of a Cartesian grid.
 `Fluid2D`, the driver plasma as a multi-species fluid heated by that field.
 
+`MHD2D` is ideal and resistive MHD in a periodic plane on a patchwork hierarchy (HLLD,
+constrained transport of the vector potential on the patch nodes, refluxing, regridding
+on the current density; `carafe.mhd`).
+
 The solves, time steps and runs carry scope-profiler regions tagged ``"carafe"``,
 an opt-in tag: they record nothing unless an application enables it, e.g. with
 ``scope_profiler.setup(enable_tags=["carafe"])``.
@@ -60,6 +64,7 @@ from carafe.global_model import (
 )
 from carafe.irm import IonizationRegion
 from carafe.magnetron import MATERIALS, Magnetron, TargetMaterial
+from carafe.mhd import MHD2D
 from carafe.reactions import Reaction
 from carafe.spatial import (
     CellGrid,
@@ -106,6 +111,7 @@ __all__ = [
     "IonizationRegion",
     "MATERIALS",
     "Magnetron",
+    "MHD2D",
     "PlasmaRegion",
     "PotentialBoundary",
     "RFDriver",

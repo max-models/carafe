@@ -22,6 +22,15 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `MHD2D` (`carafe.mhd`): ideal and resistive MHD in a periodic plane on a patchwork
+  hierarchy, in units with mu_0 = 1. HLLD fluxes, MUSCL on the primitives, Heun's method
+  with refluxing (`patchwork.FluxRegister`), and the in-plane field as the curl of a vector
+  potential on the patch nodes with Gardiner and Stone's corner EMF, so div B = 0 holds to
+  round-off on the composite mesh and across regrids (`MHD2D.regrid`, tags from the current
+  density with `MHD2D.current_tags`). Explicit resistivity with Ohmic heating in the energy.
+  Second order on the circularly polarised Alfven wave, also across a refined patch; on any
+  number of ranks the results of one rank to round-off.
+
 - `GasCoupledDriftFluid` (`carafe.gas_coupling`): `DriftFluid2D` with its neutral gas from
   `GasDynamics` instead of the fixed `refill_rate`, split on windows: the plasma's window-averaged
   ionization is the gas model's argon sink, the ions reaching the target return as argon from the
