@@ -118,8 +118,9 @@ def plot_current(model) -> None:
     fig, ax = plt.subplots(figsize=(7, 3.8))
     image = ax.pcolormesh(x, y, current.T, cmap="magma", shading="auto")
     plot_patches(mesh, show_grid=False, ax=ax)
-    if ax.get_legend() is not None:
-        ax.get_legend().remove()
+    legend = ax.get_legend()
+    if legend is not None:
+        legend.remove()
     fig.colorbar(image, ax=ax, label=r"$|J_z|$")
     ax.set_xlabel(r"$x$")
     ax.set_ylabel(r"$y$")
@@ -146,7 +147,7 @@ def plot_flux(results: dict) -> None:
 
 def main() -> None:
     """Run the case refined and uniform, print the comparison, plot."""
-    parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    parser = argparse.ArgumentParser(description=(__doc__ or "").split("\n")[0])
     parser.add_argument("--production", action="store_true")
     parser.add_argument(
         "--no-uniform", action="store_true", help="skip the uniform run"
