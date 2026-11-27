@@ -18,3 +18,6 @@ permissions:
 jobs:
   pyodide:
     uses: max-models/starlight-theme/.github/workflows/pyodide.yml@v0
+    with:
+      # the Pyccel sources: compiled, never imported (the browser runs the NumPy kernels)
+      skip: '_pyccel$'

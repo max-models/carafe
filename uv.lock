@@ -3326,6 +3326,7 @@ name = "plasma-carafe"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "cunumpy" },
     { name = "methodcard" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
@@ -3360,6 +3361,7 @@ dev = [
     { name = "patchwork-amr" },
     { name = "plasma-plots", extra = ["web"] },
     { name = "pre-commit" },
+    { name = "pyccel" },
     { name = "pyproject-fmt" },
     { name = "pyright" },
     { name = "pytest" },
@@ -3380,6 +3382,9 @@ docs = [
     { name = "plasma-plots", extra = ["web"] },
     { name = "simgeometry" },
 ]
+pyccel = [
+    { name = "pyccel" },
+]
 spatial = [
     { name = "patchwork-amr" },
     { name = "simgeometry" },
@@ -3390,6 +3395,7 @@ test = [
     { name = "methodcard", extra = ["symbolic"] },
     { name = "opencr" },
     { name = "patchwork-amr" },
+    { name = "pyccel" },
     { name = "pytest" },
     { name = "pytest-cov" },
     { name = "simgeometry" },
@@ -3398,6 +3404,7 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "astropy", marker = "extra == 'test'" },
+    { name = "cunumpy", git = "https://github.com/max-models/cunumpy?branch=devel" },
     { name = "griffe", marker = "extra == 'docs'" },
     { name = "ipykernel", marker = "extra == 'docs'" },
     { name = "jupyterlab", marker = "extra == 'dev'" },
@@ -3417,6 +3424,8 @@ requires-dist = [
     { name = "plasma-plots", extras = ["web"], marker = "extra == 'docs'", git = "https://github.com/max-models/plasma-plots?branch=devel" },
     { name = "plasmacoll", git = "https://github.com/max-models/plasmacoll?branch=devel" },
     { name = "pre-commit", marker = "extra == 'dev'" },
+    { name = "pyccel", marker = "extra == 'pyccel'", specifier = ">2.0" },
+    { name = "pyccel", marker = "extra == 'test'", specifier = ">2.0" },
     { name = "pyproject-fmt", marker = "extra == 'dev'" },
     { name = "pyright", marker = "extra == 'dev'" },
     { name = "pytest", marker = "extra == 'test'" },
@@ -3429,7 +3438,7 @@ requires-dist = [
     { name = "simgeometry", marker = "extra == 'test'", git = "https://github.com/max-models/simgeometry?branch=devel" },
     { name = "xarray" },
 ]
-provides-extras = ["cr", "dev", "docs", "spatial", "test"]
+provides-extras = ["cr", "dev", "docs", "pyccel", "spatial", "test"]
 
 [[package]]
 name = "plasma-plots"

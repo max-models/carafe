@@ -20,6 +20,8 @@ classifiers = [
   "Programming Language :: Python :: 3.14",
 ]
 dependencies = [
+  # the kernel dispatch and the Pyccel build cache (cunumpy.kernels)
+  "cunumpy>=0.7.0",
   "methodcard",
   "numpy",
   "plasmacoll>=0.6.0",
@@ -47,12 +49,14 @@ optional-dependencies.docs = [
   "patchwork-amr>=0.2.0",
   "simgeometry>=0.2.1",
 ]
+optional-dependencies.pyccel = [ "pyccel>2.0" ]
 optional-dependencies.spatial = [ "patchwork-amr>=0.2.0", "simgeometry>=0.2.1" ]
 optional-dependencies.test = [
   "astropy",
   "methodcard[symbolic]",
   "opencr",
   "patchwork-amr>=0.2.0",
+  "pyccel>2.0",
   "pytest",
   "pytest-cov",
   "simgeometry>=0.2.1",
@@ -80,7 +84,7 @@ lint.pydocstyle.convention = "google"
 
 [tool.pyright]
 include = [ "src" ]
-exclude = [ "**/tests" ]
+exclude = [ "**/tests", "src/carafe/kernels/*/*_pyccel.py" ]
 pythonVersion = "3.10"
 typeCheckingMode = "standard"
 
@@ -98,6 +102,7 @@ report.show_missing = true
 # PRs to devel test against the devel branches of the max-models packages (pinned in
 # uv.lock); PRs to main and the release use PyPI only (CI sets UV_NO_SOURCES).
 [tool.uv.sources]
+cunumpy = { git = "https://github.com/max-models/cunumpy", branch = "devel" }
 methodcard = { git = "https://github.com/max-models/methodcard", branch = "devel" }
 opencr = { git = "https://github.com/max-models/opencr", branch = "devel" }
 patchwork-amr = { git = "https://github.com/max-models/patchwork", branch = "devel" }
