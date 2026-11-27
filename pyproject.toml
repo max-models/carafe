@@ -95,7 +95,7 @@ ini_options.addopts = "-ra"
 ini_options.markers = [ "convergence: an order-of-accuracy test of a method card" ]
 
 [tool.coverage]
-run.omit = [ "*/tests/*" ]
+run.omit = [ "*/tests/*", "*/kernels/*/*_pyccel.py" ]
 run.source = [ "carafe" ]
 report.show_missing = true
 
