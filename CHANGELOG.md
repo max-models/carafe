@@ -7,6 +7,19 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- Sputter yields depend on the ion energy: `TargetMaterial.argon_yield` and `self_yield`
+  are yield models (`carafe.sputtering`, Bohdansky's formula with the Kr–C stopping and
+  the empirical threshold; numbers still give a constant yield), evaluated at the ion's
+  energy by `DriftFluid2D` (`ion_energy`), `Magnetron` (`ion_energy`, 400 eV) and the IRM,
+  which now takes its yields and second ionization energy from the material
+  (`IRMTarget(argon_yield=None, ...)`; `carafe.irm.SputterYield` is
+  `carafe.sputtering.PowerLawYield`). The `MATERIALS` carry second ionization energies,
+  surface binding energies and work functions, and their secondary electron yields come
+  from Baragiola's potential emission (`potential_emission_yield`: Ar+ about 0.1, M+ none,
+  M2+ 0.06–0.2). The factors of the yields remain placeholders.
+- `DriftFluid2D.cathode_budget` returns a dataset per ion species (fluxes, energies, yields,
+  ion and secondary electron currents) with the discharge current density at the cathode,
+  `sum (Z + gamma) e Gamma`.
 - `MHD2D`'s MUSCL reconstruction, HLLD fluxes and CT-contact electric field run as compiled
   kernels (`carafe.kernels`: Pyccel through cunumpy, NumPy where Pyccel is missing; the
   extra `plasma-carafe[pyccel]`): a step of the Orszag–Tang vortex on 256 x 256 cells from
@@ -38,6 +51,15 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   geometry of their Table 4 and the results of their Table 5, and PLACEHOLDER waveforms
   until the digitized ones of their Fig. 2 replace them; the full example "Ionization region
   model" fits it. The tutorial "Ionization region model" explains the model and the fit.
+- `DriftFluid2D` with a metal: doubly charged metal ions (`double_ionization`, a third ion
+  fluid of charge 2, the efficient secondary emitters), electron excitation and elastic
+  collisions on the metal atoms (`metal_collisions`, `lumped_excitation_rate`,
+  `metal_momentum_rate`), the closure of the atoms as a beam or diffusing
+  (`metal_transport`, `metal_diffusion`), the choice of the Ar+ secondary yield
+  (`argon_emission`) and the metal ions' own friction (`metal_ion_friction_rate`); the
+  tutorial "Metal and self-sputtering".
+- `carafe.sputtering`: `BohdanskyYield`, `PowerLawYield`, `ConstantYield` and
+  `potential_emission_yield`.
 
 - `MHD2D.rotor` and `MHD2D.blast_wave`, and the tutorial "MHD test problems" (the rotor, the
   blast wave, the energy budget of the Orszag–Tang vortex): the benchmarks of mhd-sandbox,

@@ -42,7 +42,7 @@ at their temperature; the cold gas flows in from the bulk at the filling density
 ``n_0 v_C / 4 S_BP``, so with no plasma ``n_Ar = n_0``. Metastables reaching the
 target (area ``S_RT``) are quenched to ``Ar``. At the target an ion of charge ``Z``
 arrives with the energy ``Z e (1 - f) V_D`` (the cathode fall), sputters
-``Y = a E^b`` metal atoms (per ion species) and emits ``gamma`` secondary electrons,
+``Y(E)`` metal atoms (per ion species, `carafe.sputtering`) and emits ``gamma`` secondary electrons,
 which become hot electrons; the argon ions return as ``Ar_h`` and the metal ions
 stay on the target. Argon ions that leave for the bulk return as ``Ar_w`` with the
 probability ``warm_return``. After the end of the pulse (``pulse_end``) no ion is
@@ -90,7 +90,7 @@ magnitude, to be replaced before a comparison with an experiment:
   and of the metastables are the Lotz approximation (`lotz_ionization`); for copper
   the IRM uses the cross sections of Freund et al., *Phys. Rev. A* 41, 3575 (1990);
 - the quenching, Penning, charge-exchange and gas-kick rate coefficients;
-- the sputter yield fits ``a E^b`` and the secondary electron yields of every ion
+- the sputter yields (the factor ``Q`` of the material's Bohdansky yields) and the secondary electron yields of every ion
   (`IRMTarget`), the temperatures of the sputtered, hot and warm atoms and of the
   hot electrons, and the geometry (`IonizationRegion`).
 
@@ -138,6 +138,7 @@ from carafe.magnetron import (
 )
 from carafe.reactions import Reaction
 from carafe.species import Species
+from carafe.sputtering import SputterYield, as_yield
 
 __all__ = [
     "ARGON_METASTABLE_ENERGY",
@@ -148,7 +149,6 @@ __all__ = [
     "IRMRates",
     "IRMTarget",
     "IonizationRegion",
-    "SputterYield",
     "load_case",
     "pulse_averages",
     "waveform",
@@ -208,34 +208,17 @@ def waveform(
 
 
 @dataclass(frozen=True)
-class SputterYield:
-    """A sputter yield ``Y = a E^b`` (atoms per ion), ``E`` the ion energy in eV.
-
-    ``a`` is in atoms per ion per eV^b. Zero for ``E <= 0``.
-    """
-
-    a: float
-    b: float
-
-    def __post_init__(self) -> None:
-        """Validate the fit."""
-        if self.a < 0.0 or self.b <= 0.0:
-            raise ValueError("a sputter yield needs a >= 0 and b > 0")
-
-    def __call__(self, energy: float) -> float:
-        """The yield at the ion energy ``energy`` (eV)."""
-        return self.a * max(float(energy), 0.0) ** self.b
-
-
-@dataclass(frozen=True)
 class IRMTarget:
     """The target of the IRM: the metal and its response to every ion.
 
     Attributes:
-        material: The metal (name, mass, first ionization energy, outer electrons).
-        second_ionization_energy: ``M+ -> M2+`` in eV.
-        argon_yield: The sputter yield of ``Ar+`` (``Ar2+`` at twice the energy).
-        metal_yield: The sputter yield of ``M+`` (``M2+`` at twice the energy).
+        material: The metal (name, mass, ionization energies, outer electrons and its
+            sputter yields).
+        second_ionization_energy: ``M+ -> M2+`` in eV; the material's if ``None``.
+        argon_yield: The sputter yield of ``Ar+`` and ``Ar2+`` (at twice the energy), a
+            `carafe.sputtering.SputterYield` of the ion energy; the material's if ``None``.
+        metal_yield: The sputter yield of ``M+`` and ``M2+`` (at twice the energy); the
+            material's if ``None``.
         secondary: Secondary electrons emitted per ion, by role: ``"Ar+"``,
             ``"Ar2+"``, ``"M+"``, ``"M2+"``.
         sputtered_temperature: The temperature in eV whose mean speed the sputtered
@@ -246,9 +229,9 @@ class IRMTarget:
     """
 
     material: TargetMaterial = COPPER
-    second_ionization_energy: float = unit_field("eV", 20.29)
-    argon_yield: SputterYield = SputterYield(0.07, 0.55)
-    metal_yield: SputterYield = SputterYield(0.07, 0.55)
+    second_ionization_energy: float | None = unit_field("eV", None)
+    argon_yield: SputterYield | None = None
+    metal_yield: SputterYield | None = None
     secondary: Mapping[str, float] = field(
         default_factory=lambda: {"Ar+": 0.07, "Ar2+": 0.3, "M+": 0.0, "M2+": 0.05}
     )
@@ -256,15 +239,24 @@ class IRMTarget:
     verified: bool = False
 
     def __post_init__(self) -> None:
-        """Validate the target."""
+        """Validate the target and take what is not given from the material."""
         convert_units(self)
         object.__setattr__(self, "secondary", dict(self.secondary))
         if set(self.secondary) != {"Ar+", "Ar2+", "M+", "M2+"}:
             raise ValueError('secondary needs the yields of "Ar+", "Ar2+", "M+", "M2+"')
         if min(self.secondary.values()) < 0.0:
             raise ValueError("a secondary electron yield must be >= 0")
-        if self.second_ionization_energy <= self.material.ionization_energy:
+        if self.second_ionization_energy is None:
+            second = self.material.second_ionization_energy
+            if second is None:
+                raise ValueError("the material has no second ionization energy")
+            object.__setattr__(self, "second_ionization_energy", second)
+        if self.second_ionization <= self.material.ionization_energy:
             raise ValueError("the second ionization energy must exceed the first")
+        if self.argon_yield is None:
+            object.__setattr__(self, "argon_yield", as_yield(self.material.argon_yield))
+        if self.metal_yield is None:
+            object.__setattr__(self, "metal_yield", as_yield(self.material.self_yield))
         if self.sputtered_temperature <= 0.0:
             raise ValueError("sputtered_temperature must be > 0")
 
@@ -273,9 +265,20 @@ class IRMTarget:
         """The element, e.g. ``"Cu"``."""
         return self.material.name
 
+    @property
+    def second_ionization(self) -> float:
+        """``M+ -> M2+`` in eV."""
+        return float(cast(float, self.second_ionization_energy))
 
-#: A copper target. The second ionization energy is data; the sputter yield fits
-#: (about 2 atoms per ion at 500 eV), the secondary electron yields (Ar+ 0.07,
+    def sputter_yield(self, projectile: str, energy: float) -> float:
+        """Atoms sputtered per ion of ``projectile`` (``"Ar"`` or ``"M"``) at ``energy`` eV."""
+        model = self.argon_yield if projectile == "Ar" else self.metal_yield
+        return float(cast(SputterYield, model)(energy))
+
+
+#: A copper target. The second ionization energy is data; the sputter yields are the
+#: copper's of `carafe.magnetron.MATERIALS` (Bohdansky's formula, PLACEHOLDER factor:
+#: 2.0 atoms per Ar+ and 2.2 per Cu+ at 500 eV); the secondary electron yields (Ar+ 0.07,
 #: Ar2+ 0.3 by potential emission, Cu+ none, Cu2+ 0.05) and the temperature of the
 #: sputtered atoms are PLACEHOLDERS: Gudmundsson et al. (2022) take them from
 #: TRIM/the literature for copper.
@@ -347,7 +350,7 @@ class IRMRates:
         "quasineutrality": r"n_e = n_{\mathrm{Ar}^+} + 2 n_{\mathrm{Ar}^{2+}} + n_{\mathrm{M}^+} + 2 n_{\mathrm{M}^{2+}} - n_h",
         "ions": r"\Gamma_i^\mathrm{BP} = n_i u_{B,i} S_\mathrm{BP}, \qquad \Gamma_i^t = \frac{\beta_t}{1 - \beta_t}\, \Gamma_i^\mathrm{BP}, \qquad u_{B,i} = \sqrt{e T_e / M_i}",
         "neutrals": r"\frac{dn_X}{dt} \mathrel{-}= \frac{\bar v_X}{4} \frac{S_\mathrm{BP}}{V} n_X, \qquad \frac{dn_\mathrm{Ar}}{dt} \mathrel{+}= \frac{\bar v_\mathrm{Ar}}{4} \frac{S_\mathrm{BP}}{V} n_0, \qquad \bar v_X = \sqrt{\frac{8 e T_X}{\pi m_X}}",
-        "target": r"E_i = Z_i e (1 - f) V_D, \qquad \Gamma_\mathrm{sput} = \sum_i Y_i(E_i)\, \Gamma_i^t, \qquad \Gamma_\mathrm{SE} = \sum_i \gamma_i \Gamma_i^t, \qquad Y = a E^b",
+        "target": r"E_i = Z_i e (1 - f) V_D, \qquad \Gamma_\mathrm{sput} = \sum_i Y_i(E_i)\, \Gamma_i^t, \qquad \Gamma_\mathrm{SE} = \sum_i \gamma_i \Gamma_i^t, \qquad Y_i(E) \text{ Bohdansky}",
         "hot_electrons": r"\frac{dn_h}{dt} = \frac{\Gamma_\mathrm{SE}}{V} - \frac{\sum_j k_j(T_H)\, n_h n_j \varepsilon_j}{\tfrac32 T_H} - \frac{n_h}{\tau_h}",
         "current": r"I_D^\mathrm{model} = e \left(\sum_i Z_i \Gamma_i^t + \Gamma_\mathrm{SE}\right) = e\left(\Gamma_e + \Gamma_h - \sum_i Z_i \Gamma_i^\mathrm{BP}\right)",
         "energy": r"\frac{d}{dt}\left(\tfrac32 n_e T_e\right) = \frac{I_D f V_D}{e V} - \sum_\mathrm{cold} R_j \varepsilon_j - 2 T_e \frac{\Gamma_e}{V}, \qquad \frac{\Gamma_e}{V} = S_e - \frac{dn_e}{dt}",
@@ -580,7 +583,7 @@ class IonizationRegion:
         metal_ion_ionization = r.metal_ion_ionization
         if metal_ion_ionization is None:
             metal_ion_ionization = lotz_ionization(
-                self.target.second_ionization_energy, m.outer_electrons
+                self.target.second_ionization, m.outer_electrons
             )
         reactions = []
         for gas in ARGON_GROUND:
@@ -676,7 +679,7 @@ class IonizationRegion:
                 ("e", ion),
                 ("e", "e", ion2),
                 metal_ion_ionization,
-                electron_energy_loss=self.target.second_ionization_energy,
+                electron_energy_loss=self.target.second_ionization,
                 name=f"e + {ion} ionization",
             ),
             Reaction(
@@ -805,10 +808,10 @@ class IonizationRegion:
         energy = {name: species[name].charge * (1.0 - f) * vd for name in self._ions}
         target = self.target
         yields = {
-            ARGON_ION: target.argon_yield(energy[ARGON_ION]),
-            ARGON_ION2: target.argon_yield(energy[ARGON_ION2]),
-            ion: target.metal_yield(energy[ion]),
-            ion2: target.metal_yield(energy[ion2]),
+            ARGON_ION: target.sputter_yield("Ar", energy[ARGON_ION]),
+            ARGON_ION2: target.sputter_yield("Ar", energy[ARGON_ION2]),
+            ion: target.sputter_yield("M", energy[ion]),
+            ion2: target.sputter_yield("M", energy[ion2]),
         }
         sputtered = sum(yields[name] * to_target[name] for name in self._ions)
         secondary = sum(
@@ -933,7 +936,7 @@ class IonizationRegion:
         metal_out = terms["neutral_out"][metal] + metal_ions_out
         fall = (1.0 - self.voltage_fraction) * terms["voltage"]
         self_sputtered = sum(
-            self.target.metal_yield(self.species[k].charge * fall) * to_target[k]
+            self.target.sputter_yield("M", self.species[k].charge * fall) * to_target[k]
             for k in (ion, ion2)
         )
         argon = sum(n[name] for name in (*ARGON_GROUND, METASTABLE))

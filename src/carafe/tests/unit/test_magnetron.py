@@ -344,7 +344,9 @@ def test_the_discharge_current_is_the_ion_current_to_the_target_with_its_seconda
     expected += (1.0 + m.self_secondary) * to_target["Ti+"]
     assert currents["I_D"] == pytest.approx(expected, rel=1e-12)
     # and the sputtered flux is what the ions to the target sputter
-    sputtered = (m.argon_yield * to_target["Ar+"] + m.self_yield * to_target["Ti+"]) / E
+    y_ar = m.sputter_yield("Ar+", magnetron.ion_energy)
+    y_ti = m.sputter_yield("M+", magnetron.ion_energy)
+    sputtered = (y_ar * to_target["Ar+"] + y_ti * to_target["Ti+"]) / E
     assert currents["sputtered"] == pytest.approx(sputtered, rel=1e-12)
 
 
