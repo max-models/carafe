@@ -24,6 +24,11 @@ electrons, `DriverCoupling`, that field with a power-dependent plasma, and
 `InductiveField3D`, the field in 3D on the edges of a Cartesian grid.
 `Fluid2D`, the driver plasma as a multi-species fluid heated by that field.
 
+`HallThruster1D` is the 1D axial model of a Hall thruster: neutrals, ions with
+momentum and quasineutral electrons with an anomalous collision frequency and an
+energy equation with wall losses, the discharge current from the voltage
+(`carafe.hall`).
+
 `MHD2D` is ideal and resistive MHD in the plane (three velocity and field components) on the patches
 of a patchwork hierarchy, the in-plane field from a nodal vector potential so that its
 divergence is zero to round-off, refined patches included (`carafe.mhd`).
@@ -62,6 +67,7 @@ from carafe.global_model import (
     VolumeSource,
     WallReaction,
 )
+from carafe.hall import HallState, HallThruster1D
 from carafe.irm import IonizationRegion
 from carafe.magnetron import MATERIALS, Magnetron, TargetMaterial
 from carafe.mhd import MHD2D
@@ -105,6 +111,8 @@ __all__ = [
     "GasTemperature",
     "GlobalModel",
     "GlobalState",
+    "HallState",
+    "HallThruster1D",
     "InductiveField2D",
     "InductiveField3D",
     "InductiveSolution",
