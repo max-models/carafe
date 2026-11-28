@@ -20,6 +20,15 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `DriftFluid2D.cathode_budget` returns a dataset per ion species (fluxes, energies, yields,
   ion and secondary electron currents) with the discharge current density at the cathode,
   `sum (Z + gamma) e Gamma`.
+- `MHD2D` computes the primitive variables and their positivity check, the stable step, and
+  the resistive and Braginskii-conductive face terms in compiled kernels too
+  (`mhd_primitive`, `mhd_rate`, `mhd_resistive`, `mhd_conductive`), writes the fluxes into
+  work arrays kept per patch instead of new arrays and dicts of slices, and keeps the start
+  values of the Heun step in place: a step of the Orszag–Tang vortex on 256 x 256 cells from
+  65 ms to 54 ms, on 128 x 128 from 16.5 ms to 13.5 ms, and of resistive Harris sheets with
+  conduction on 256 x 256 from 82 ms to 63 ms, with bit-for-bit the same results. New
+  profiling regions `carafe.mhd_stable_step`, `carafe.mhd_halos` and `carafe.mhd_fluxes`,
+  and the tutorial "MHD performance" (the step-time breakdown with scope-profiler).
 - `MHD2D`'s MUSCL reconstruction, HLLD fluxes and CT-contact electric field run as compiled
   kernels (`carafe.kernels`: Pyccel through cunumpy, NumPy where Pyccel is missing; the
   extra `plasma-carafe[pyccel]`): a step of the Orszag–Tang vortex on 256 x 256 cells from
@@ -60,7 +69,16 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   tutorial "Metal and self-sputtering".
 - `carafe.sputtering`: `BohdanskyYield`, `PowerLawYield`, `ConstantYield` and
   `potential_emission_yield`.
-
+- `HallThruster1D` (`carafe.hall`): a 1D axial model of a Hall thruster. Neutrals at a
+  fixed speed, singly charged ions with momentum (MUSCL and the Rusanov flux), quasineutral
+  electrons with the cross-field mobility of classical and anomalous collisions (a closure:
+  `TwoZoneBohm` or any callable of an `ElectronContext`), the discharge current from the
+  voltage by current continuity, and an implicit electron energy equation with ohmic
+  heating, ionization and excitation losses and wall losses. Inputs: voltage, mass flow,
+  channel length and area, cathode line, a field profile (`GaussianField`); outputs the
+  profiles, the current trace, thrust, I_sp and anode efficiency as an xarray dataset. The
+  xenon rates (Goebel and Katz's fits) and the wall loss (the LANDMARK exponential form) are
+  PLACEHOLDERS. The tutorial "Hall thruster 1D" runs an SPT-100-like case.
 - `MHD2D.rotor` and `MHD2D.blast_wave`, and the tutorial "MHD test problems" (the rotor, the
   blast wave, the energy budget of the Orszag–Tang vortex): the benchmarks of mhd-sandbox,
   whose solver `MHD2D` replaces.
