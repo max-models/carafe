@@ -7,6 +7,10 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- `MHD2D` fills the fine halos of the vector potential by quadratic interpolation from the
+  level below (`exchange_halos(..., interpolation="quadratic")`, patchwork): the resistive
+  decay across a coarse–fine edge converges at second order (mean error of B_y 3.5e-3 and
+  8.7e-4 on 16 and 32 cells, against 4.3e-3 and 1.3e-3 with bilinear halos).
 - Sputter yields depend on the ion energy: `TargetMaterial.argon_yield` and `self_yield`
   are yield models (`carafe.sputtering`, Bohdansky's formula with the Kr–C stopping and
   the empirical threshold; numbers still give a constant yield), evaluated at the ion's

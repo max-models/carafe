@@ -125,9 +125,9 @@ def test_resistivity_damps_the_field_at_the_diffusion_rate(levels) -> None:
     decay = np.exp(-eta * K * K * model.time)
     by = np.mean(np.abs(leaf["magnetic_field_y"] - amp * np.sin(K * leaf["x"]) * decay))
     bz = np.mean(np.abs(leaf["magnetic_field_z"] - amp * np.cos(K * leaf["y"]) * decay))
-    # second order on one level; next to a coarse-fine edge the current of the
-    # interpolated potential is first order
-    assert by < (6e-3 if levels else 3e-3) * amp * decay
+    # second order on one level and, with the quadratic halos of the potential, on
+    # the refined mesh too (bilinear halos: 4.3e-3, first order at the edge)
+    assert by < (3.6e-3 if levels else 3e-3) * amp * decay
     assert bz < 4e-3 * amp * decay
     # Ohmic heating stays in the energy
     assert abs(model.totals()["energy"] - start["energy"]) < 1e-12
@@ -176,3 +176,27 @@ def test_reconnection_on_patches_follows_the_uniform_mesh() -> None:
     change = abs(uniform["psi"] - start["psi"])
     assert change > 1e-2 * start["psi"]
     assert abs(refined["psi"] - uniform["psi"]) < 0.05 * change
+
+
+def _refined_decay_error(n: int) -> float:
+    eta, amp = 0.02, 1e-3
+    mesh = AMRHierarchy((n, n), ((0.0, 1.0), (0.0, 1.0)), periodic=(True, True))
+    mesh.add_patch(1, ((n // 2, 3 * n // 2), (n // 2, 3 * n // 2)))
+    model = MHD2D(mesh, resistivity=eta, limiter="none")
+    model.set_state(
+        1.0,
+        (0.0, 0.0, 0.0),
+        1.0,
+        vector_potential=lambda x, y: amp * np.cos(K * x) / K,
+    )
+    model.run(0.25)
+    leaf = model.leaf_values()
+    decay = np.exp(-eta * K * K * model.time)
+    exact = amp * np.sin(K * leaf["x"]) * decay
+    return float(np.mean(np.abs(leaf["magnetic_field_y"] - exact)) / (amp * decay))
+
+
+def test_resistive_decay_converges_at_second_order_across_a_coarse_fine_edge() -> None:
+    """The quadratic halos of the potential keep the current at the edge accurate."""
+    coarse, fine = _refined_decay_error(16), _refined_decay_error(32)
+    assert np.log2(coarse / fine) > 1.8
