@@ -26,6 +26,19 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `IonizationRegion` (`carafe.irm`): the outputs of the IRM papers, the current at the
+  target by carrier (`target_current`), the ion fluxes to the target and the bulk, the
+  ionization probability `alpha`, `beta_t` over the time, the power balance of the thermal
+  electrons (`electron_power`: ohmic heating, collisions, escape, stored) and the power the
+  hot electrons lose; `pulse_end`, after which no ion is attracted back (`beta_t = 0` in
+  the afterglow); `pulse_averages` (`<alpha_t>`, `<beta_t>`, `<alpha>`, the ionized flux
+  fraction, the deepest rarefaction; also `IRMFit.averages`); and `load_case`/`IRMCase`, a
+  measured pulse, the device and the published results in one CSV file.
+  `examples/data/irm_copper_case1.csv` is case I of Gudmundsson et al. (2022) with the
+  geometry of their Table 4 and the results of their Table 5, and PLACEHOLDER waveforms
+  until the digitized ones of their Fig. 2 replace them; the full example "Ionization region
+  model" fits it. The tutorial "Ionization region model" explains the model and the fit.
+
 - `MHD2D.rotor` and `MHD2D.blast_wave`, and the tutorial "MHD test problems" (the rotor, the
   blast wave, the energy budget of the Orszag–Tang vortex): the benchmarks of mhd-sandbox,
   whose solver `MHD2D` replaces.
