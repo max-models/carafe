@@ -69,9 +69,11 @@ face-normal field taken from :math:`A_z`, the electric field at the nodes by the
 upwind "CT-contact" average of the face fluxes (Gardiner and Stone 2005), Heun's
 method (SSP-RK2), and refluxing (`patchwork.FluxRegister`) at coarse–fine faces.
 Where a reconstructed density or pressure is not positive the face falls back to
-first order. The resistive and conductive terms are explicit (``J_z`` at the nodes from
-the face fields, ``J_x``, ``J_y`` at the faces from ``B_z``), and the step keeps within
-the diffusion limit of the finest cells.
+first order. The reconstruction, the Riemann solver and the CT-contact average run as
+compiled kernels over whole blocks (``carafe.kernels``: Pyccel through cunumpy, their
+NumPy versions where Pyccel is missing). The resistive and conductive terms are explicit
+(``J_z`` at the nodes from the face fields, ``J_x``, ``J_y`` at the faces from ``B_z``),
+and the step keeps within the diffusion limit of the finest cells.
 
 **Boundaries.** Periodic axes are those the hierarchy declares periodic. The faces
 of each other axis are outflow (zero-gradient) boundaries or perfectly conducting,
@@ -105,6 +107,9 @@ from scope_profiler import profile
 
 from carafe._profiling import _PROFILE_TAGS
 from carafe.datasets import variable
+from carafe.kernels.ct_contact import kernel as ct_contact
+from carafe.kernels.mhd_sweep import LIMITER_CODES
+from carafe.kernels.mhd_sweep import kernel as mhd_sweep
 from carafe.limiters import LIMITERS
 
 if TYPE_CHECKING:
@@ -279,53 +284,6 @@ def _alfven_problem() -> ConvergenceProblem:
 
 
 # Helpers -------------------------------------------------------------------------#
-def _ct_contact(fx_by, gy_bx, fx_rho, gy_rho, ecc, nx, ny):
-    """``E_z`` at the nodes of a block by the CT-contact average (Gardiner and Stone 2005).
-
-    ``fx_*`` are x-face fluxes of the haloed block at x-faces ``2 .. X - 2`` (array
-    index ``k`` is x-face ``k + 2``) and all rows; ``gy_*`` y-face fluxes at all
-    columns and y-faces ``2 .. Y - 2``; ``ecc`` the cell electric field ``B_x u_y - B_y
-    u_x``. Returns ``E_z`` at the block's ``(nx + 1, ny + 1)`` nodes.
-    """
-    h = HALO
-    # node (i, j) of the block is node (i + h, j + h) of the haloed block; the x-face
-    # at column i + h is fx index i + h - 2, the y-face at row j + h is gy index j + h - 2
-    ci = np.arange(nx + 1)[:, None] + h  # node columns, haloed
-    rj = np.arange(ny + 1)[None, :] + h  # node rows, haloed
-
-    def fxb(col, row):
-        return fx_by[col - 2, row]
-
-    def gyb(col, row):
-        return gy_bx[col, row - 2]
-
-    def fxr(col, row):
-        return fx_rho[col - 2, row]
-
-    def gyr(col, row):
-        return gy_rho[col, row - 2]
-
-    def upwind(mass, positive, negative):
-        return np.where(
-            mass > 0.0,
-            positive,
-            np.where(mass < 0.0, negative, 0.5 * (positive + negative)),
-        )
-
-    i, j = ci, rj
-    dl2 = upwind(
-        fxr(i, j - 1), gyb(i - 1, j) - ecc[i - 1, j - 1], gyb(i, j) - ecc[i, j - 1]
-    )
-    dr2 = upwind(fxr(i, j), gyb(i - 1, j) - ecc[i - 1, j], gyb(i, j) - ecc[i, j])
-    dl1 = upwind(
-        gyr(i - 1, j), -fxb(i, j - 1) - ecc[i - 1, j - 1], -fxb(i, j) - ecc[i - 1, j]
-    )
-    dr1 = upwind(gyr(i, j), -fxb(i, j - 1) - ecc[i, j - 1], -fxb(i, j) - ecc[i, j])
-    return 0.25 * (
-        gyb(i, j) + gyb(i - 1, j) - fxb(i, j) - fxb(i, j - 1) + dl1 + dr1 + dl2 + dr2
-    )
-
-
 def _outflow_cells(array: np.ndarray, axis: int, lower: bool, upper: bool) -> None:
     """Zero-gradient halo cells at the domain's faces along ``axis``."""
     h = HALO
@@ -388,7 +346,7 @@ def _transverse_gradient(t: np.ndarray, axis: int, spacing: float) -> np.ndarray
     """Limited gradient across the faces normal to ``axis`` (Sharma and Hammett 2007).
 
     For the faces between cells ``k - 1`` and ``k`` along ``axis`` (``k = 2 .. n -
-    2``, as `MHD2D._reconstruct`), the derivative along the other axis: the
+    2``, as the ``mhd_sweep`` kernel), the derivative along the other axis: the
     monotonized-central limiter of the four one-sided differences of the two cells.
     Zero in the first and last row across, which no block face uses.
     """
@@ -851,42 +809,6 @@ class MHD2D:
         return prim, bxf, byf
 
     # The right-hand side -------------------------------------------------------#
-    def _reconstruct(self, q: np.ndarray, axis: int) -> tuple[np.ndarray, np.ndarray]:
-        """Left and right states at the faces along ``axis`` (array axis 1 + axis).
-
-        For ``n`` cells along the axis, the faces between cells ``k - 1`` and
-        ``k`` for ``k = 2 .. n - 2``.
-        """
-        limit = LIMITERS[self.limiter]
-        a = 1 + axis
-
-        def cut(start, stop):
-            index = [slice(None)] * q.ndim
-            index[a] = slice(start, stop)
-            return q[tuple(index)]
-
-        n = q.shape[a]
-        diff = np.diff(q, axis=a)  # diff k is q[k + 1] - q[k]
-        index = [slice(None)] * q.ndim
-        index[a] = slice(0, n - 3)
-        backward = diff[tuple(index)]
-        index[a] = slice(1, n - 2)
-        forward = diff[tuple(index)]
-        index[a] = slice(2, n - 1)
-        further = diff[tuple(index)]
-        slope_left = limit(backward, forward)  # cells 1 .. n - 3
-        slope_right = limit(forward, further)  # cells 2 .. n - 2
-        left = cut(1, n - 2) + 0.5 * slope_left
-        right = cut(2, n - 1) - 0.5 * slope_right
-        # first order where a reconstructed density or pressure is not positive
-        bad = (
-            (left[0] <= 0.0) | (left[4] <= 0.0) | (right[0] <= 0.0) | (right[4] <= 0.0)
-        )
-        if np.any(bad):
-            left = np.where(bad, cut(1, n - 2), left)
-            right = np.where(bad, cut(2, n - 1), right)
-        return left, right
-
     def _current(self, bxf: np.ndarray, byf: np.ndarray, level: int) -> np.ndarray:
         """``J_z`` at the inner nodes of a haloed block: node ``(I, J)`` at ``[I - 1, J - 1]``."""
         dx, dy = self.hierarchy.spacing(level)
@@ -983,22 +905,19 @@ class MHD2D:
         nx, ny = patch.shape
         h = HALO
         gamma = self.gamma
-        rho, u, v, w, p, bx, by, bz = prim
-        # x-sweep: normal x, tangential (y, z)
-        qx = np.stack((rho, u, v, w, p, by, bz))
-        left, right = self._reconstruct(qx, 0)
-        fx = hlld_flux(left, right, bxf[2:-2, :], gamma)  # faces 2 .. X - 2, all rows
-        # y-sweep: normal y, tangential (x, z)
-        qy = np.stack((rho, v, u, w, p, bx, bz))
-        left, right = self._reconstruct(qy, 1)
-        fy = hlld_flux(
-            left, right, byf[:, 2:-2], gamma
-        )  # all columns, faces 2 .. Y - 2
-        # fx[k] at x-face k + 2 of the haloed block, i.e. block face k + 2 - h
+        _, u, v, _, _, bx, by, _ = prim
+        code = LIMITER_CODES.index(self.limiter)
+        # x-sweep (normal x, tangential (y, z)): x-faces 2 .. X - 2, all rows; fx[:, k]
+        # at x-face k + 2 of the haloed block, i.e. block face k + 2 - h
+        fx = np.empty((7, prim.shape[1] - 3, prim.shape[2]))
+        mhd_sweep(prim, bxf, 0, code, gamma, fx)
+        # y-sweep (normal y, tangential (x, z)): all columns, y-faces 2 .. Y - 2
+        fy = np.empty((7, prim.shape[1], prim.shape[2] - 3))
+        mhd_sweep(prim, byf, 1, code, gamma, fy)
         ecc = bx * v - by * u
-        fx_by, gy_bx = fx[5], fy[5]  # x-flux of B_y = -E_z, y-flux of B_x = +E_z
-        fx_rho, gy_rho = fx[0], fy[0]
-        ez = _ct_contact(fx_by, gy_bx, fx_rho, gy_rho, ecc, nx, ny)
+        # the x-flux of B_y is -E_z, the y-flux of B_x is +E_z
+        ez = np.empty((nx + 1, ny + 1))
+        ct_contact(fx[5], fy[5], fx[0], fy[0], ecc, ez)
         resistive = self._resistive(prim, bxf, byf, patch) if self.resistivity else None
         if resistive is not None:
             ez = ez + resistive["ez"]

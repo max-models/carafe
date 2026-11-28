@@ -7,6 +7,10 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- `MHD2D`'s MUSCL reconstruction, HLLD fluxes and CT-contact electric field run as compiled
+  kernels (`carafe.kernels`: Pyccel through cunumpy, NumPy where Pyccel is missing; the
+  extra `plasma-carafe[pyccel]`): a step of the Orszag–Tang vortex on 256 x 256 cells from
+  0.32 s to 0.09 s, the same results to round-off. cunumpy is a new dependency.
 - Renamed from wellbalanced to carafe: the import is `carafe`, the PyPI package
   `plasma-carafe`, the repository max-models/carafe and the scope-profiler tag `carafe`.
 - `LocalDispersion` solves the electrons' 2 x 2 momentum balance in closed form and evaluates
