@@ -14,10 +14,10 @@ from carafe.irm import (
     IonizationRegion,
     IRMRates,
     IRMTarget,
-    SputterYield,
     waveform,
 )
-from carafe.magnetron import lotz_ionization
+from carafe.magnetron import COPPER, lotz_ionization
+from carafe.sputtering import ConstantYield, PowerLawYield
 
 E = ELEMENTARY_CHARGE
 pytestmark = pytest.mark.filterwarnings("ignore:.*placeholders, not data")
@@ -63,12 +63,20 @@ def mean_speed(temperature_ev: float, mass_u: float) -> float:
     return np.sqrt(8.0 * E * temperature_ev / (np.pi * mass_u * ATOMIC_MASS))
 
 
-def test_the_sputter_yield_is_a_power_law() -> None:
-    fit = SputterYield(0.07, 0.55)
-    assert fit(400.0) == pytest.approx(0.07 * 400.0**0.55)
-    assert fit(0.0) == 0.0 and fit(-5.0) == 0.0
-    with pytest.raises(ValueError, match="sputter yield"):
-        SputterYield(0.1, 0.0)
+def test_the_target_takes_the_yields_and_the_second_ionization_of_the_material() -> (
+    None
+):
+    target = IRMTarget()
+    assert target.second_ionization == pytest.approx(20.29)
+    assert target.sputter_yield("Ar", 500.0) == pytest.approx(2.0)
+    assert target.sputter_yield("M", 500.0) == pytest.approx(2.2)
+    custom = IRMTarget(argon_yield=PowerLawYield(0.07, 0.55))
+    assert custom.sputter_yield("Ar", 400.0) == pytest.approx(0.07 * 400.0**0.55)
+    with pytest.raises(ValueError, match="second ionization"):
+        IRMTarget(second_ionization_energy=5.0)
+    bare = dataclasses.replace(COPPER, second_ionization_energy=None)
+    with pytest.raises(ValueError, match="no second ionization"):
+        IRMTarget(material=bare)
 
 
 def test_a_waveform_interpolates_the_samples() -> None:
@@ -221,8 +229,8 @@ def test_without_sputtering_the_metal_plays_no_part() -> None:
     def run(factor: float):
         target = dataclasses.replace(
             COPPER_TARGET,
-            argon_yield=SputterYield(0.0, 0.5),
-            metal_yield=SputterYield(0.0, 0.5),
+            argon_yield=ConstantYield(0.0),
+            metal_yield=ConstantYield(0.0),
         )
         rate = lotz_ionization(7.726, 1)
         rates = IRMRates(metal_ionization=lambda te: factor * rate(te))

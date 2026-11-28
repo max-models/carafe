@@ -46,14 +46,15 @@ temperature), the radial structure of the plasma and the ionization zones
 the fits of Lieberman and Lichtenberg, *Principles of Plasma Discharges and
 Materials Processing*, 2nd ed., ch. 3; the metal ionization rate is the Lotz
 approximation (Lotz, *Z. Phys.* 206, 205, 1967) averaged over a Maxwellian in
-closed form. Every other number (sputter and secondary electron yields, the
-charge-exchange rate, the geometry, the heating fraction, the wind efficiency,
-the refill time, the seed source) is a **placeholder** of the right order of
-magnitude, to be replaced by data for the target and the device: yields from
-TRIM/SRIM or measured tables at the ion energy of the cathode fall, secondary
-electron yields from the literature on ion-induced emission for the target
-material, geometry from the magnetron. A `Magnetron` with a placeholder
-material warns.
+closed form. The sputter yields are functions of the ion energy (`carafe.sputtering`:
+Bohdansky's formula, evaluated at ``ion_energy``) and the secondary electron yields
+Baragiola's empirical potential emission, from the ionization energies and the work
+function. Every other number (the factor ``Q`` of the yields, the charge-exchange rate,
+the ion energy, the geometry, the heating fraction, the wind efficiency, the refill
+time, the seed source) is a **placeholder** of the right order of magnitude, to be
+replaced by data for the target and the device: yields from TRIM/SRIM or measured
+tables (see `MATERIALS`), geometry from the magnetron. A `Magnetron` with a
+placeholder material warns.
 
 All temperatures are in eV, densities in m^-3, areas in m^2, currents in A and
 voltages in V.
@@ -97,11 +98,18 @@ from carafe.global_model import (
 )
 from carafe.reactions import Reaction
 from carafe.species import ELECTRON, Species
+from carafe.sputtering import (
+    BohdanskyYield,
+    SputterYield,
+    as_yield,
+    potential_emission_yield,
+)
 
 __all__ = [
     "COPPER",
     "MATERIALS",
     "TITANIUM",
+    "YIELD_ANCHOR_ENERGY",
     "Magnetron",
     "TargetMaterial",
     "WindEfficiency",
@@ -309,18 +317,28 @@ class TargetMaterial:
     """The sputtered metal and the response of the target to the ions.
 
     Attributes:
-        name: The element, e.g. ``"Ti"``; the species are ``name`` and ``name+``.
+        name: The element, e.g. ``"Ti"``; the species are ``name``, ``name+`` and ``name2+``.
         mass_u: The atomic mass in u.
         ionization_energy: The first ionization energy in eV.
         outer_electrons: The electrons of the outer shell in the Lotz formula.
-        argon_yield: Atoms sputtered per ``Ar+`` at the cathode-fall energy.
-        self_yield: Atoms sputtered per metal ion (self-sputtering).
+        argon_yield: Atoms sputtered per ``Ar+``: a `carafe.sputtering.SputterYield` of the
+            ion energy (eV), or a number for the same yield at every energy.
+        self_yield: Atoms sputtered per metal ion (self-sputtering), a yield model or a
+            number; the doubly charged ions sputter with it at their (double) energy.
         argon_secondary: Secondary electrons emitted per ``Ar+``.
-        self_secondary: Secondary electrons emitted per metal ion.
+        self_secondary: Secondary electrons emitted per ``M+``.
         charge_exchange: Rate of ``Ar+ + M -> Ar + M+`` in m^3/s.
+        second_ionization_energy: ``M+ -> M2+`` in eV, ``None`` if unknown.
+        ion_outer_electrons: The electrons of the outer shell of ``M+`` in the Lotz
+            formula of ``M+ -> M2+``.
+        double_secondary: Secondary electrons emitted per ``M2+`` (potential emission).
+        excitation_energy: The energy (eV) of the lumped excited level of the electron
+            impact excitation of ``M``, ``None`` if unknown.
+        surface_binding_energy: ``U_s`` in eV (the sublimation energy), ``None`` if unknown.
+        work_function: The work function of the target in eV, ``None`` if unknown.
         verified: ``False`` while the yields and rates are placeholders.
 
-    The mass, energy and rate take astropy Quantities or strings such as
+    The mass, energies and rate take astropy Quantities or strings such as
     ``"6.83 eV"`` too.
     """
 
@@ -328,11 +346,17 @@ class TargetMaterial:
     mass_u: float = field(metadata=unit_metadata("u"))
     ionization_energy: float = field(metadata=unit_metadata("eV"))
     outer_electrons: int
-    argon_yield: float
-    self_yield: float
+    argon_yield: SputterYield | float
+    self_yield: SputterYield | float
     argon_secondary: float
     self_secondary: float
     charge_exchange: float = field(metadata=unit_metadata("m^3 / s"))
+    second_ionization_energy: float | None = unit_field("eV", None)
+    ion_outer_electrons: int = 1
+    double_secondary: float = 0.0
+    excitation_energy: float | None = unit_field("eV", None)
+    surface_binding_energy: float | None = unit_field("eV", None)
+    work_function: float | None = unit_field("eV", None)
     verified: bool = False
 
     def __post_init__(self) -> None:
@@ -340,55 +364,135 @@ class TargetMaterial:
         convert_units(self)
         if self.mass_u <= 0.0 or self.ionization_energy <= 0.0:
             raise ValueError("mass_u and ionization_energy must be > 0")
-        if min(self.argon_yield, self.self_yield) < 0.0:
-            raise ValueError("a sputter yield must be >= 0")
-        if min(self.argon_secondary, self.self_secondary) < 0.0:
+        for value in (self.argon_yield, self.self_yield):
+            if not callable(value) and value < 0.0:
+                raise ValueError("a sputter yield must be >= 0")
+        secondaries = (self.argon_secondary, self.self_secondary, self.double_secondary)
+        if min(secondaries) < 0.0:
             raise ValueError("a secondary electron yield must be >= 0")
+        second = self.second_ionization_energy
+        if second is not None and second <= self.ionization_energy:
+            raise ValueError("the second ionization energy must exceed the first")
+
+    def sputter_yield(self, ion: str, energy: np.ndarray | float) -> np.ndarray | float:
+        """Atoms sputtered per ion ``ion`` (``"Ar+"``, ``"M+"`` or ``"M2+"``) of ``energy`` eV."""
+        if ion == "Ar+":
+            return as_yield(self.argon_yield)(energy)
+        if ion in ("M+", "M2+"):
+            return as_yield(self.self_yield)(energy)
+        raise ValueError(f"unknown ion {ion!r}: Ar+, M+ or M2+")
+
+    def secondary_yield(self, ion: str) -> float:
+        """Secondary electrons emitted per ion ``ion`` (``"Ar+"``, ``"M+"`` or ``"M2+"``)."""
+        yields = {
+            "Ar+": self.argon_secondary,
+            "M+": self.self_secondary,
+            "M2+": self.double_secondary,
+        }
+        if ion not in yields:
+            raise ValueError(f"unknown ion {ion!r}: Ar+, M+ or M2+")
+        return yields[ion]
+
+
+#: The argon atom: atomic number and mass (u).
+_ARGON_Z, _ARGON_MASS_U = 18, 39.948
+#: The energy (eV) of the ions at which the yields of `MATERIALS` are anchored.
+YIELD_ANCHOR_ENERGY = 500.0
 
 
 def _material(
     name: str,
+    z: int,
     mass_u: float,
-    ionization_energy: float,
-    outer_electrons: int,
-    argon_yield: float,
-    self_yield: float,
-    argon_secondary: float = 0.1,
-    self_secondary: float = 0.05,
+    ionization_energies: tuple[float, float],
+    outer_electrons: tuple[int, int],
+    surface_binding_energy: float,
+    work_function: float,
+    excitation_energy: float,
+    yields_at_500: tuple[float, float],
 ) -> TargetMaterial:
-    """A target material of the table below."""
+    """A target material of the table below.
+
+    The sputter yields are `BohdanskyYield` of ``Ar+`` and of the metal on the target,
+    anchored at ``yields_at_500`` atoms per ion at 500 eV; the secondary electron yields
+    are `potential_emission_yield` of argon's, the first and the second ionization energy.
+    """
+    first, second = ionization_energies
+    argon, self_ = yields_at_500
     return TargetMaterial(
         name=name,
         mass_u=mass_u,
-        ionization_energy=ionization_energy,
-        outer_electrons=outer_electrons,
-        argon_yield=argon_yield,
-        self_yield=self_yield,
-        argon_secondary=argon_secondary,
-        self_secondary=self_secondary,
+        ionization_energy=first,
+        outer_electrons=outer_electrons[0],
+        argon_yield=BohdanskyYield.anchored(
+            _ARGON_Z,
+            _ARGON_MASS_U,
+            z,
+            mass_u,
+            surface_binding_energy,
+            YIELD_ANCHOR_ENERGY,
+            argon,
+        ),
+        self_yield=BohdanskyYield.anchored(
+            z, mass_u, z, mass_u, surface_binding_energy, YIELD_ANCHOR_ENERGY, self_
+        ),
+        argon_secondary=float(
+            potential_emission_yield(ARGON_IONIZATION_ENERGY, work_function)
+        ),
+        self_secondary=float(potential_emission_yield(first, work_function)),
         charge_exchange=1.0e-15,
+        second_ionization_energy=second,
+        ion_outer_electrons=outer_electrons[1],
+        double_secondary=float(potential_emission_yield(second, work_function)),
+        excitation_energy=excitation_energy,
+        surface_binding_energy=surface_binding_energy,
+        work_function=work_function,
     )
 
 
-#: The targets of the spoke literature. The atomic masses and first ionization
-#: energies (eV) are data. Everything else is a PLACEHOLDER of the right order and
-#: not checked against a source: the outer-shell electron count of the Lotz
-#: formula; the Ar and self-sputter yields at a few hundred eV (to take from
-#: Ziegler's SRIM or Yamamura-Tawara tables at the ion energy of the cathode
-#: fall: the review of Hecimovic and von Keudell, *J. Phys. D* 51, 453001, 2018,
-#: tabulates them for these metals, but this table was not copied from it);
-#: the ion-induced secondary electron yields (Depla et al.'s measurements for
-#: metals and oxides are the source to check); and the charge-exchange rate.
+#: The targets of the spoke literature.
+#:
+#: Data: the atomic numbers and masses, the first and second ionization energies (eV, NIST
+#: Atomic Spectra Database), the surface binding energies (the sublimation energies of
+#: Kittel's table of cohesive energies, eV) and the work functions (polycrystalline, CRC
+#: Handbook, eV). Derived from them: the sputter thresholds (`bohdansky_threshold`) and
+#: the secondary electron yields (`potential_emission_yield`, Baragiola's formula: ``Ar+``
+#: about 0.1, ``M+`` none, ``M2+`` 0.06 for Ti to 0.2 for Cu; good to a factor of about
+#: two, and without the kinetic emission).
+#:
+#: PLACEHOLDERS, not checked against a source: the factor ``Q`` of the sputter yields,
+#: anchored at the ``Ar+`` and self-sputter yields at 500 eV as remembered from the tables of
+#: Laegreid and Wehner (*J. Appl. Phys.* 32, 365, 1961) and Matsunami et al. (*At. Data
+#: Nucl. Data Tables* 31, 1, 1984) (Ar+: Al 1.05, Cr 1.18, Cu 2.0, Ti 0.51, Au 2.4, Mo 0.80,
+#: Nb 0.60; the self-sputter yields guessed of the same order); replace by Eckstein's fitted
+#: ``Q`` and ``E_th`` (Topics Appl. Phys. 110, 2007), Yamamura and Tawara (1996), SRIM or
+#: Depla and Mahieu (2008). The outer-shell electron counts of the Lotz formula (``M`` and
+#: ``M+``: the outermost subshell only), the lumped excitation level (the resonance lines,
+#: roughly) and the charge-exchange rate are placeholders too.
 MATERIALS: dict[str, TargetMaterial] = {
     m.name: m
     for m in (
-        _material("Al", 26.982, 5.986, 3, 0.65, 0.55),
-        _material("Cr", 51.996, 6.767, 1, 0.9, 0.8),
-        _material("Cu", 63.546, 7.726, 1, 1.0, 1.0),
-        _material("Ti", 47.867, 6.828, 2, 0.4, 0.3),
-        _material("Au", 196.967, 9.226, 1, 2.4, 2.5),
-        _material("Mo", 95.95, 7.092, 1, 0.7, 0.8),
-        _material("Nb", 92.906, 6.759, 1, 0.5, 0.6),
+        _material(
+            "Al", 13, 26.982, (5.986, 18.83), (1, 2), 3.39, 4.28, 3.1, (1.05, 0.9)
+        ),
+        _material(
+            "Cr", 24, 51.996, (6.767, 16.49), (1, 5), 4.10, 4.5, 3.0, (1.18, 1.1)
+        ),
+        _material(
+            "Cu", 29, 63.546, (7.726, 20.29), (1, 10), 3.49, 4.65, 3.8, (2.0, 2.2)
+        ),
+        _material(
+            "Ti", 22, 47.867, (6.828, 13.58), (2, 1), 4.85, 4.33, 3.3, (0.51, 0.45)
+        ),
+        _material(
+            "Au", 79, 196.967, (9.226, 20.52), (1, 10), 3.81, 5.1, 4.6, (2.4, 3.2)
+        ),
+        _material(
+            "Mo", 42, 95.95, (7.092, 16.16), (1, 5), 6.82, 4.6, 3.2, (0.80, 0.85)
+        ),
+        _material(
+            "Nb", 41, 92.906, (6.759, 14.32), (1, 4), 7.57, 4.3, 3.0, (0.60, 0.65)
+        ),
     )
 }
 
@@ -469,6 +573,10 @@ class Magnetron:
         seed: A pair source in m^-3 s^-1 that stands for the residual plasma
             and preionization at the start of a pulse; it keeps the density from
             decaying to zero in the afterglow.
+        ion_energy: The energy in eV of the (singly charged) ions at the target, at
+            which the sputter yields of the material are evaluated: the cathode fall,
+            ``e V_D`` less the potential of the region. PLACEHOLDER: 400 eV, a dc
+            magnetron's fall; the model does not follow it with ``V_D(t)``.
 
     The physical settings take astropy Quantities or strings such as
     ``"0.5 Pa"``, ``"10 mTorr"`` or ``"20 mm"`` too (the gas temperature also
@@ -487,6 +595,7 @@ class Magnetron:
     wind_efficiency: float | Callable[[float], float] = 0.0
     heating_fraction: float = 1.0
     seed: float = unit_field("m^-3 / s", 1.0e19)
+    ion_energy: float = unit_field("eV", 400.0)
 
     def __post_init__(self) -> None:
         """Validate the magnetron, and warn about placeholder data."""
@@ -614,8 +723,9 @@ class Magnetron:
         s = self.species
         m = self.material
         rate = 0.0
-        for role, sputter in (("gas_ion", m.argon_yield), ("metal_ion", m.self_yield)):
+        for role, ion in (("gas_ion", "Ar+"), ("metal_ion", "M+")):
             name = s[role].name
+            sputter = float(m.sputter_yield(ion, self.ion_energy))
             rate += sputter * self.bohm_flux_coefficient(te, name) * densities[name]
         return rate
 
@@ -632,8 +742,9 @@ class Magnetron:
         s = self.species
         m = self.material
         sources = []
-        for ion, sputter in (("gas_ion", m.argon_yield), ("metal_ion", m.self_yield)):
+        for ion, projectile in (("gas_ion", "Ar+"), ("metal_ion", "M+")):
             name = s[ion].name
+            sputter = float(m.sputter_yield(projectile, self.ion_energy))
 
             def flux(te: float, _tg: float, name: str = name) -> float:
                 return self.bohm_flux_coefficient(te, name)
@@ -807,8 +918,8 @@ class Magnetron:
             currents[f"I_D_{name}"] = (1.0 + secondary) * currents[f"I_{name}"]
         gas_ion, metal_ion = s["gas_ion"].name, s["metal_ion"].name
         sputtered = (
-            m.argon_yield * currents[f"I_{gas_ion}"]
-            + m.self_yield * currents[f"I_{metal_ion}"]
+            float(m.sputter_yield("Ar+", self.ion_energy)) * currents[f"I_{gas_ion}"]
+            + float(m.sputter_yield("M+", self.ion_energy)) * currents[f"I_{metal_ion}"]
         ) / E
         ions = state.densities[gas_ion] + state.densities[metal_ion]
         ion_current = currents[f"I_{gas_ion}"] + currents[f"I_{metal_ion}"]
@@ -838,8 +949,12 @@ class Magnetron:
         m = self.material
         currents = self.target_currents(state)
         gas_ion, metal_ion = s["gas_ion"].name, s["metal_ion"].name
-        from_argon = m.argon_yield * currents[f"I_{gas_ion}"]
-        from_metal = m.self_yield * currents[f"I_{metal_ion}"]
+        from_argon = (
+            float(m.sputter_yield("Ar+", self.ion_energy)) * currents[f"I_{gas_ion}"]
+        )
+        from_metal = (
+            float(m.sputter_yield("M+", self.ion_energy)) * currents[f"I_{metal_ion}"]
+        )
         sputtered = from_argon + from_metal
         density = state.densities
         return {
