@@ -376,7 +376,10 @@ class HallState:
                 {"long_name": "$t$", "units": "us"},
             )
             data["discharge_current_history"] = variable(
-                "time", self.history["discharge_current"], "discharge current $I_d$", "A"
+                "time",
+                self.history["discharge_current"],
+                "discharge current $I_d$",
+                "A",
             )
             data["ion_current_history"] = variable(
                 "time", self.history["ion_current"], "ion current $I_i$", "A"
@@ -512,6 +515,52 @@ class HallThruster1D:
         ui = -bohm + (exit_speed + bohm) * ramp
         return self.state(nn, ni, ni * ui, te, time=0.0)
 
+    def _mobility(
+        self, nn: np.ndarray, ni: np.ndarray, te: np.ndarray, anomalous: np.ndarray
+    ) -> np.ndarray:
+        """The cross-field mobility ``mu`` (m^2/(V s)) on the cells."""
+        elastic = nn * self.reactions["elastic"].coefficients(te, 0.0)
+        # electron-ion collisions, NRL formulary (ln Lambda for T_e > 10 eV, at least 1)
+        log_lambda = np.maximum(
+            24.0 - np.log(np.sqrt(ni * 1.0e-6) / np.maximum(te, TE_FLOOR)), 1.0
+        )
+        coulomb = 2.91e-12 * ni * log_lambda * np.maximum(te, TE_FLOOR) ** -1.5
+        nu = elastic + coulomb + anomalous
+        hall = E * self.b / (ELECTRON_MASS * nu)
+        return E / (ELECTRON_MASS * nu) / (1.0 + hall**2)
+
+    def _electrons(
+        self, nn: np.ndarray, ni: np.ndarray, gi: np.ndarray, te: np.ndarray
+    ) -> dict:
+        """The current density, field, potential and electron flux of the unknowns."""
+        anomalous = np.asarray(
+            self.anomalous(self.context(nn, ni, gi, te)), dtype=float
+        )
+        mu = self._mobility(nn, ni, te, anomalous)
+        pressure_gradient = np.gradient(ni * te, self.h) / ni
+        resistance = 1.0 / (ni * mu)
+        w = self._weights * self.h
+        current = (
+            E
+            * (
+                self.discharge_voltage
+                + np.sum(w * (gi * resistance + pressure_gradient))
+            )
+            / np.sum(w * resistance)
+        )
+        efield = (current / E - gi) * resistance - pressure_gradient
+        phi_faces = self.discharge_voltage - np.concatenate(
+            ([0.0], np.cumsum(efield * self.h))
+        )
+        return {
+            "current": current,
+            "field": efield,
+            "potential": 0.5 * (phi_faces[:-1] + phi_faces[1:]),
+            "electron_flux": gi - current / E,
+            "mobility": mu,
+            "anomalous": anomalous,
+        }
+
     def state(
         self,
         neutral_density: np.ndarray,
@@ -563,46 +612,6 @@ class HallThruster1D:
             channel_length=self.channel_length,
         )
 
-    def _mobility(
-        self, nn: np.ndarray, ni: np.ndarray, te: np.ndarray, anomalous: np.ndarray
-    ) -> np.ndarray:
-        """The cross-field mobility ``mu`` (m^2/(V s)) on the cells."""
-        elastic = nn * self.reactions["elastic"].coefficients(te, 0.0)
-        # electron-ion collisions, NRL formulary (ln Lambda for T_e > 10 eV, at least 1)
-        log_lambda = np.maximum(
-            24.0 - np.log(np.sqrt(ni * 1.0e-6) / np.maximum(te, TE_FLOOR)), 1.0
-        )
-        coulomb = 2.91e-12 * ni * log_lambda * np.maximum(te, TE_FLOOR) ** -1.5
-        nu = elastic + coulomb + anomalous
-        hall = E * self.b / (ELECTRON_MASS * nu)
-        return E / (ELECTRON_MASS * nu) / (1.0 + hall**2)
-
-    def _electrons(
-        self, nn: np.ndarray, ni: np.ndarray, gi: np.ndarray, te: np.ndarray
-    ) -> dict:
-        """The current density, field, potential and electron flux of the unknowns."""
-        anomalous = np.asarray(self.anomalous(self.context(nn, ni, gi, te)), dtype=float)
-        mu = self._mobility(nn, ni, te, anomalous)
-        pressure_gradient = np.gradient(ni * te, self.h) / ni
-        resistance = 1.0 / (ni * mu)
-        w = self._weights * self.h
-        current = E * (
-            self.discharge_voltage
-            + np.sum(w * (gi * resistance + pressure_gradient))
-        ) / np.sum(w * resistance)
-        efield = (current / E - gi) * resistance - pressure_gradient
-        phi_faces = self.discharge_voltage - np.concatenate(
-            ([0.0], np.cumsum(efield * self.h))
-        )
-        return {
-            "current": current,
-            "field": efield,
-            "potential": 0.5 * (phi_faces[:-1] + phi_faces[1:]),
-            "electron_flux": gi - current / E,
-            "mobility": mu,
-            "anomalous": anomalous,
-        }
-
     # -- the heavy species ----------------------------------------------------------------
 
     def _heavy_rhs(
@@ -630,9 +639,7 @@ class HallThruster1D:
         n_left, n_right = faces(density)
         u_left, u_right = faces(velocity)
         speed = np.concatenate(([sound[0]], sound, [sound[-1]]))
-        wave = np.maximum(
-            np.abs(u_left) + speed[:-1], np.abs(u_right) + speed[1:]
-        )
+        wave = np.maximum(np.abs(u_left) + speed[:-1], np.abs(u_right) + speed[1:])
         thermal = E * self.ion_temperature / self.mass
         mass_left, mass_right = n_left * u_left, n_right * u_right
         momentum_left = mass_left * u_left + n_left * thermal
@@ -652,7 +659,9 @@ class HallThruster1D:
             + E / self.mass * ni * efield
             + ionization * self.neutral_speed
         )
-        ends = np.array([neutral_flux[0] + mass_flux[0], neutral_flux[-1] + mass_flux[-1]])
+        ends = np.array(
+            [neutral_flux[0] + mass_flux[0], neutral_flux[-1] + mass_flux[-1]]
+        )
         return dnn, dni, dgi, ends
 
     # -- the electron energy ----------------------------------------------------------------
@@ -671,7 +680,9 @@ class HallThruster1D:
         h = self.h
         flux = electrons["electron_flux"]
         kappa = 2.5 * electrons["mobility"] * n_new * te
-        face_flux = np.concatenate(([flux[0]], 0.5 * (flux[1:] + flux[:-1]), [flux[-1]]))
+        face_flux = np.concatenate(
+            ([flux[0]], 0.5 * (flux[1:] + flux[:-1]), [flux[-1]])
+        )
         face_kappa = np.concatenate(
             ([kappa[0]], 0.5 * (kappa[1:] + kappa[:-1]), [kappa[-1]])
         )

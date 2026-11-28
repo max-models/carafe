@@ -117,9 +117,7 @@ def test_the_current_is_the_same_everywhere_and_the_voltage_is_applied() -> None
     model = HallThruster1D(cells=50, cathode=0.04)
     state = model.run(5.0e-6, samples=5)
     ni, te = state.ion_density, state.electron_temperature
-    mu = model._mobility(
-        state.neutral_density, ni, te, state.anomalous_frequency
-    )
+    mu = model._mobility(state.neutral_density, ni, te, state.anomalous_frequency)
     electron_flux = -mu * (ni * state.electric_field + np.gradient(ni * te, model.h))
     current = E * model.area * (ni * state.ion_velocity - electron_flux)
     np.testing.assert_allclose(current, state.discharge_current, rtol=1e-10)
@@ -155,7 +153,9 @@ def test_spt100_lands_in_the_range_of_the_thruster(spt100) -> None:
     thrust = state.average("thrust")
     assert 4.0 < current < 8.0
     assert 0.08 < thrust < 0.12
-    assert 0.8 < state.average("ion_current") * XENON.mass / (E * model.mass_flow) < 1.05
+    assert (
+        0.8 < state.average("ion_current") * XENON.mass / (E * model.mass_flow) < 1.05
+    )
     assert 15.0e3 < state.ion_velocity[-1] < 22.0e3
     at_exit = np.interp(model.channel_length, state.z, state.ion_velocity)
     assert 10.0e3 < at_exit < 19.0e3
@@ -167,7 +167,12 @@ def test_spt100_lands_in_the_range_of_the_thruster(spt100) -> None:
 def test_the_dataset_and_a_continued_run(spt100) -> None:
     model, state = spt100
     data = state.to_dataset()
-    for name in ("neutral_density", "ion_velocity", "electron_temperature", "potential"):
+    for name in (
+        "neutral_density",
+        "ion_velocity",
+        "electron_temperature",
+        "potential",
+    ):
         assert data[name].dims == ("z",)
         assert "$" in data[name].attrs["long_name"]
     assert data.discharge_current_history.dims == ("time",)
