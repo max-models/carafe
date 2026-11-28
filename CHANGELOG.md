@@ -35,6 +35,16 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `HallThruster1D` (`carafe.hall`): a 1D axial model of a Hall thruster. Neutrals at a
+  fixed speed, singly charged ions with momentum (MUSCL and the Rusanov flux), quasineutral
+  electrons with the cross-field mobility of classical and anomalous collisions (a closure:
+  `TwoZoneBohm` or any callable of an `ElectronContext`), the discharge current from the
+  voltage by current continuity, and an implicit electron energy equation with ohmic
+  heating, ionization and excitation losses and wall losses. Inputs: voltage, mass flow,
+  channel length and area, cathode line, a field profile (`GaussianField`); outputs the
+  profiles, the current trace, thrust, I_sp and anode efficiency as an xarray dataset. The
+  xenon rates (Goebel and Katz's fits) and the wall loss (the LANDMARK exponential form) are
+  PLACEHOLDERS. The tutorial "Hall thruster 1D" runs an SPT-100-like case.
 - `MHD2D.rotor` and `MHD2D.blast_wave`, and the tutorial "MHD test problems" (the rotor, the
   blast wave, the energy budget of the Orszag–Tang vortex): the benchmarks of mhd-sandbox,
   whose solver `MHD2D` replaces.
