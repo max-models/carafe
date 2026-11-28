@@ -20,6 +20,7 @@ export default defineDocs({
 			'carafe.neutralizer': 'Neutralizer',
 			'carafe.driver': 'RF driver (0D)',
 			'carafe.magnetron': 'Magnetron',
+			'carafe.sputtering': 'Sputter yields',
 			'carafe.irm': 'Ionization region model',
 			'carafe.fluid1d': 'Fluid 1D',
 			'carafe.spatial.grid': 'Cell grid',

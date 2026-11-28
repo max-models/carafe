@@ -7,6 +7,19 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- Sputter yields depend on the ion energy: `TargetMaterial.argon_yield` and `self_yield`
+  are yield models (`carafe.sputtering`, Bohdansky's formula with the Kr–C stopping and
+  the empirical threshold; numbers still give a constant yield), evaluated at the ion's
+  energy by `DriftFluid2D` (`ion_energy`), `Magnetron` (`ion_energy`, 400 eV) and the IRM,
+  which now takes its yields and second ionization energy from the material
+  (`IRMTarget(argon_yield=None, ...)`; `carafe.irm.SputterYield` is
+  `carafe.sputtering.PowerLawYield`). The `MATERIALS` carry second ionization energies,
+  surface binding energies and work functions, and their secondary electron yields come
+  from Baragiola's potential emission (`potential_emission_yield`: Ar+ about 0.1, M+ none,
+  M2+ 0.06–0.2). The factors of the yields remain placeholders.
+- `DriftFluid2D.cathode_budget` returns a dataset per ion species (fluxes, energies, yields,
+  ion and secondary electron currents) with the discharge current density at the cathode,
+  `sum (Z + gamma) e Gamma`.
 - `MHD2D` computes the primitive variables and their positivity check, the stable step, and
   the resistive and Braginskii-conductive face terms in compiled kernels too
   (`mhd_primitive`, `mhd_rate`, `mhd_resistive`, `mhd_conductive`), writes the fluxes into
@@ -35,6 +48,27 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `IonizationRegion` (`carafe.irm`): the outputs of the IRM papers, the current at the
+  target by carrier (`target_current`), the ion fluxes to the target and the bulk, the
+  ionization probability `alpha`, `beta_t` over the time, the power balance of the thermal
+  electrons (`electron_power`: ohmic heating, collisions, escape, stored) and the power the
+  hot electrons lose; `pulse_end`, after which no ion is attracted back (`beta_t = 0` in
+  the afterglow); `pulse_averages` (`<alpha_t>`, `<beta_t>`, `<alpha>`, the ionized flux
+  fraction, the deepest rarefaction; also `IRMFit.averages`); and `load_case`/`IRMCase`, a
+  measured pulse, the device and the published results in one CSV file.
+  `examples/data/irm_copper_case1.csv` is case I of Gudmundsson et al. (2022) with the
+  geometry of their Table 4 and the results of their Table 5, and PLACEHOLDER waveforms
+  until the digitized ones of their Fig. 2 replace them; the full example "Ionization region
+  model" fits it. The tutorial "Ionization region model" explains the model and the fit.
+- `DriftFluid2D` with a metal: doubly charged metal ions (`double_ionization`, a third ion
+  fluid of charge 2, the efficient secondary emitters), electron excitation and elastic
+  collisions on the metal atoms (`metal_collisions`, `lumped_excitation_rate`,
+  `metal_momentum_rate`), the closure of the atoms as a beam or diffusing
+  (`metal_transport`, `metal_diffusion`), the choice of the Ar+ secondary yield
+  (`argon_emission`) and the metal ions' own friction (`metal_ion_friction_rate`); the
+  tutorial "Metal and self-sputtering".
+- `carafe.sputtering`: `BohdanskyYield`, `PowerLawYield`, `ConstantYield` and
+  `potential_emission_yield`.
 - `HallThruster1D` (`carafe.hall`): a 1D axial model of a Hall thruster. Neutrals at a
   fixed speed, singly charged ions with momentum (MUSCL and the Rusanov flux), quasineutral
   electrons with the cross-field mobility of classical and anomalous collisions (a closure:

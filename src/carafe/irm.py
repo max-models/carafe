@@ -42,10 +42,11 @@ at their temperature; the cold gas flows in from the bulk at the filling density
 ``n_0 v_C / 4 S_BP``, so with no plasma ``n_Ar = n_0``. Metastables reaching the
 target (area ``S_RT``) are quenched to ``Ar``. At the target an ion of charge ``Z``
 arrives with the energy ``Z e (1 - f) V_D`` (the cathode fall), sputters
-``Y = a E^b`` metal atoms (per ion species) and emits ``gamma`` secondary electrons,
+``Y(E)`` metal atoms (per ion species, `carafe.sputtering`) and emits ``gamma`` secondary electrons,
 which become hot electrons; the argon ions return as ``Ar_h`` and the metal ions
 stay on the target. Argon ions that leave for the bulk return as ``Ar_w`` with the
-probability ``warm_return``.
+probability ``warm_return``. After the end of the pulse (``pulse_end``) no ion is
+attracted back, ``beta_t = 0``, as in the IRM papers.
 
 **Energy.** The thermal electrons are heated ohmically by the current through the
 IR, ``P = I_D V_IR`` with ``V_IR = f V_D``; they lose the energy of the inelastic and
@@ -56,10 +57,26 @@ makes the discharge current continuous: the current at the target,
 ``I_D = e (sum_i Z_i Gamma_i^t + Gamma_SE)``, equals the current into the bulk,
 ``e (Gamma_e + Gamma_h - sum_i Z_i Gamma_i^bulk)``, at every instant.
 
-**Outputs.** The densities, ``T_e``, the model's discharge current, the sputtered
-flux, ``alpha_t`` (the share of the sputtered atoms that are ionized and return to
-the target), the ionized flux fraction of the metal leaving for the bulk, the
-self-sputtering share and the rarefaction of the argon.
+**Drive.** Current-driven (the usual IRM): the measured ``I_D(t)`` heats the
+electrons, ``P = I_D f V_D``, and the fit makes the model's own current match it.
+Voltage-driven (``current=None``): the model's own current heats them, a discharge
+run by ``V_D(t)`` alone. With self-sputtering a long voltage-driven pulse can run
+away, as a real one at a fixed voltage does; a current-driven one cannot.
+
+**Outputs.** The densities, ``T_e``, the model's discharge current and its
+composition at the target (each ion ``Z e Gamma_i^t`` and the secondary electrons),
+the ion fluxes to the target and the bulk, the sputtered flux, ``alpha_t`` (the
+share of the sputtered atoms that are ionized and return to the target), the
+ionization probability ``alpha = alpha_t / beta_t``, the ionized flux fraction of
+the metal leaving for the bulk, the self-sputtering share, the rarefaction of the
+argon and the power balance of the thermal electrons (ohmic heating, collisions,
+the electrons that leave, the stored energy) and the power the hot ones lose in
+collisions. `pulse_averages` gives the time averages of the IRM papers:
+``<alpha_t>``, ``<beta_t>``, ``<alpha>``, the ionized flux fraction and the deepest
+rarefaction.
+
+**Cases.** `load_case` reads a measured pulse and the device from one file (an
+`IRMCase`), to fit and compare with a paper's table.
 
 **Data.** Only the atomic masses and ionization energies, and the argon metastable
 energy, are data. Everything else is a **PLACEHOLDER** of the right order of
@@ -73,7 +90,7 @@ magnitude, to be replaced before a comparison with an experiment:
   and of the metastables are the Lotz approximation (`lotz_ionization`); for copper
   the IRM uses the cross sections of Freund et al., *Phys. Rev. A* 41, 3575 (1990);
 - the quenching, Penning, charge-exchange and gas-kick rate coefficients;
-- the sputter yield fits ``a E^b`` and the secondary electron yields of every ion
+- the sputter yields (the factor ``Q`` of the material's Bohdansky yields) and the secondary electron yields of every ion
   (`IRMTarget`), the temperatures of the sputtered, hot and warm atoms and of the
   hot electrons, and the geometry (`IonizationRegion`).
 
@@ -91,9 +108,11 @@ voltages in V and times in s.
 from __future__ import annotations
 
 import dataclasses
+import re
 import warnings
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, cast
 
 import numpy as np
@@ -119,16 +138,19 @@ from carafe.magnetron import (
 )
 from carafe.reactions import Reaction
 from carafe.species import Species
+from carafe.sputtering import SputterYield, as_yield
 
 __all__ = [
     "ARGON_METASTABLE_ENERGY",
     "ARGON_SECOND_IONIZATION_ENERGY",
     "COPPER_TARGET",
+    "IRMCase",
     "IRMFit",
     "IRMRates",
     "IRMTarget",
     "IonizationRegion",
-    "SputterYield",
+    "load_case",
+    "pulse_averages",
     "waveform",
 ]
 
@@ -154,6 +176,14 @@ ARGON_ION2 = "Ar2+"
 HOT_ELECTRONS = "e_h"
 #: The argon ground-state groups.
 ARGON_GROUND = (ARGON, WARM_ARGON, HOT_ARGON)
+#: The terms of the power balance of the thermal electrons: name -> diagnostics key.
+#: ``ohmic = collisions + escape + stored``.
+_POWER_TERMS = {
+    "ohmic": "ohmic",
+    "collisions": "collision_power",
+    "escape": "escape_power",
+    "stored": "stored_power",
+}
 
 
 def waveform(
@@ -178,34 +208,17 @@ def waveform(
 
 
 @dataclass(frozen=True)
-class SputterYield:
-    """A sputter yield ``Y = a E^b`` (atoms per ion), ``E`` the ion energy in eV.
-
-    ``a`` is in atoms per ion per eV^b. Zero for ``E <= 0``.
-    """
-
-    a: float
-    b: float
-
-    def __post_init__(self) -> None:
-        """Validate the fit."""
-        if self.a < 0.0 or self.b <= 0.0:
-            raise ValueError("a sputter yield needs a >= 0 and b > 0")
-
-    def __call__(self, energy: float) -> float:
-        """The yield at the ion energy ``energy`` (eV)."""
-        return self.a * max(float(energy), 0.0) ** self.b
-
-
-@dataclass(frozen=True)
 class IRMTarget:
     """The target of the IRM: the metal and its response to every ion.
 
     Attributes:
-        material: The metal (name, mass, first ionization energy, outer electrons).
-        second_ionization_energy: ``M+ -> M2+`` in eV.
-        argon_yield: The sputter yield of ``Ar+`` (``Ar2+`` at twice the energy).
-        metal_yield: The sputter yield of ``M+`` (``M2+`` at twice the energy).
+        material: The metal (name, mass, ionization energies, outer electrons and its
+            sputter yields).
+        second_ionization_energy: ``M+ -> M2+`` in eV; the material's if ``None``.
+        argon_yield: The sputter yield of ``Ar+`` and ``Ar2+`` (at twice the energy), a
+            `carafe.sputtering.SputterYield` of the ion energy; the material's if ``None``.
+        metal_yield: The sputter yield of ``M+`` and ``M2+`` (at twice the energy); the
+            material's if ``None``.
         secondary: Secondary electrons emitted per ion, by role: ``"Ar+"``,
             ``"Ar2+"``, ``"M+"``, ``"M2+"``.
         sputtered_temperature: The temperature in eV whose mean speed the sputtered
@@ -216,9 +229,9 @@ class IRMTarget:
     """
 
     material: TargetMaterial = COPPER
-    second_ionization_energy: float = unit_field("eV", 20.29)
-    argon_yield: SputterYield = SputterYield(0.07, 0.55)
-    metal_yield: SputterYield = SputterYield(0.07, 0.55)
+    second_ionization_energy: float | None = unit_field("eV", None)
+    argon_yield: SputterYield | None = None
+    metal_yield: SputterYield | None = None
     secondary: Mapping[str, float] = field(
         default_factory=lambda: {"Ar+": 0.07, "Ar2+": 0.3, "M+": 0.0, "M2+": 0.05}
     )
@@ -226,15 +239,24 @@ class IRMTarget:
     verified: bool = False
 
     def __post_init__(self) -> None:
-        """Validate the target."""
+        """Validate the target and take what is not given from the material."""
         convert_units(self)
         object.__setattr__(self, "secondary", dict(self.secondary))
         if set(self.secondary) != {"Ar+", "Ar2+", "M+", "M2+"}:
             raise ValueError('secondary needs the yields of "Ar+", "Ar2+", "M+", "M2+"')
         if min(self.secondary.values()) < 0.0:
             raise ValueError("a secondary electron yield must be >= 0")
-        if self.second_ionization_energy <= self.material.ionization_energy:
+        if self.second_ionization_energy is None:
+            second = self.material.second_ionization_energy
+            if second is None:
+                raise ValueError("the material has no second ionization energy")
+            object.__setattr__(self, "second_ionization_energy", second)
+        if self.second_ionization <= self.material.ionization_energy:
             raise ValueError("the second ionization energy must exceed the first")
+        if self.argon_yield is None:
+            object.__setattr__(self, "argon_yield", as_yield(self.material.argon_yield))
+        if self.metal_yield is None:
+            object.__setattr__(self, "metal_yield", as_yield(self.material.self_yield))
         if self.sputtered_temperature <= 0.0:
             raise ValueError("sputtered_temperature must be > 0")
 
@@ -243,9 +265,20 @@ class IRMTarget:
         """The element, e.g. ``"Cu"``."""
         return self.material.name
 
+    @property
+    def second_ionization(self) -> float:
+        """``M+ -> M2+`` in eV."""
+        return float(cast(float, self.second_ionization_energy))
 
-#: A copper target. The second ionization energy is data; the sputter yield fits
-#: (about 2 atoms per ion at 500 eV), the secondary electron yields (Ar+ 0.07,
+    def sputter_yield(self, projectile: str, energy: float) -> float:
+        """Atoms sputtered per ion of ``projectile`` (``"Ar"`` or ``"M"``) at ``energy`` eV."""
+        model = self.argon_yield if projectile == "Ar" else self.metal_yield
+        return float(cast(SputterYield, model)(energy))
+
+
+#: A copper target. The second ionization energy is data; the sputter yields are the
+#: copper's of `carafe.magnetron.MATERIALS` (Bohdansky's formula, PLACEHOLDER factor:
+#: 2.0 atoms per Ar+ and 2.2 per Cu+ at 500 eV); the secondary electron yields (Ar+ 0.07,
 #: Ar2+ 0.3 by potential emission, Cu+ none, Cu2+ 0.05) and the temperature of the
 #: sputtered atoms are PLACEHOLDERS: Gudmundsson et al. (2022) take them from
 #: TRIM/the literature for copper.
@@ -317,11 +350,13 @@ class IRMRates:
         "quasineutrality": r"n_e = n_{\mathrm{Ar}^+} + 2 n_{\mathrm{Ar}^{2+}} + n_{\mathrm{M}^+} + 2 n_{\mathrm{M}^{2+}} - n_h",
         "ions": r"\Gamma_i^\mathrm{BP} = n_i u_{B,i} S_\mathrm{BP}, \qquad \Gamma_i^t = \frac{\beta_t}{1 - \beta_t}\, \Gamma_i^\mathrm{BP}, \qquad u_{B,i} = \sqrt{e T_e / M_i}",
         "neutrals": r"\frac{dn_X}{dt} \mathrel{-}= \frac{\bar v_X}{4} \frac{S_\mathrm{BP}}{V} n_X, \qquad \frac{dn_\mathrm{Ar}}{dt} \mathrel{+}= \frac{\bar v_\mathrm{Ar}}{4} \frac{S_\mathrm{BP}}{V} n_0, \qquad \bar v_X = \sqrt{\frac{8 e T_X}{\pi m_X}}",
-        "target": r"E_i = Z_i e (1 - f) V_D, \qquad \Gamma_\mathrm{sput} = \sum_i Y_i(E_i)\, \Gamma_i^t, \qquad \Gamma_\mathrm{SE} = \sum_i \gamma_i \Gamma_i^t, \qquad Y = a E^b",
+        "target": r"E_i = Z_i e (1 - f) V_D, \qquad \Gamma_\mathrm{sput} = \sum_i Y_i(E_i)\, \Gamma_i^t, \qquad \Gamma_\mathrm{SE} = \sum_i \gamma_i \Gamma_i^t, \qquad Y_i(E) \text{ Bohdansky}",
         "hot_electrons": r"\frac{dn_h}{dt} = \frac{\Gamma_\mathrm{SE}}{V} - \frac{\sum_j k_j(T_H)\, n_h n_j \varepsilon_j}{\tfrac32 T_H} - \frac{n_h}{\tau_h}",
         "current": r"I_D^\mathrm{model} = e \left(\sum_i Z_i \Gamma_i^t + \Gamma_\mathrm{SE}\right) = e\left(\Gamma_e + \Gamma_h - \sum_i Z_i \Gamma_i^\mathrm{BP}\right)",
         "energy": r"\frac{d}{dt}\left(\tfrac32 n_e T_e\right) = \frac{I_D f V_D}{e V} - \sum_\mathrm{cold} R_j \varepsilon_j - 2 T_e \frac{\Gamma_e}{V}, \qquad \frac{\Gamma_e}{V} = S_e - \frac{dn_e}{dt}",
         "outputs": r"\alpha_t = \frac{\sum_{M^{Z+}} \Gamma_{M^{Z+}}^t}{\Gamma_\mathrm{sput}}, \qquad F_\mathrm{flux} = \frac{\Gamma_{M^+}^\mathrm{BP} + \Gamma_{M^{2+}}^\mathrm{BP}}{\Gamma_M^\mathrm{BP} + \Gamma_{M^+}^\mathrm{BP} + \Gamma_{M^{2+}}^\mathrm{BP}}",
+        "averages": r"\langle\alpha_t\rangle = \frac{\int \Gamma_{M^{Z+}}^t dt}{\int \Gamma_\mathrm{sput} dt}, \qquad \langle\beta_t\rangle = \frac{\int \Gamma_{M^{Z+}}^t dt}{\int (\Gamma_{M^{Z+}}^t + \Gamma_{M^{Z+}}^\mathrm{BP}) dt}, \qquad \beta_t(t > t_\mathrm{pulse}) = 0",
+        "electron_power": r"I_D f V_D = P_\mathrm{coll} + 2 T_e e \Gamma_e + \frac{d}{dt}\left(\tfrac32 n_e e T_e V\right)",
     },
     assumptions=(
         r"a uniform annulus over the racetrack; the measured $I_D(t)$, $V_D(t)$ drive it, $\beta_t \in [0, 1)$ and $f \in (0, 1)$ are fitted",
@@ -371,6 +406,9 @@ class IonizationRegion:
         hot_argon_temperature: The temperature of the hot argon in eV.
         warm_return: The share of the argon ions leaving for the bulk that return
             as warm argon.
+        pulse_end: The time in s at which the pulse ends: after it, in the
+            afterglow, no ion is attracted back (``beta_t = 0``); ``None``: the
+            pulse never ends.
 
     The physical settings take Quantities or strings such as ``"1 Pa"`` or
     ``"10 mm"`` too.
@@ -391,6 +429,7 @@ class IonizationRegion:
     warm_temperature: float = unit_field("eV", 0.1)
     hot_argon_temperature: float = unit_field("eV", 1.0)
     warm_return: float = 1.0
+    pulse_end: float | None = unit_field("s", None)
     # filled in by __post_init__: the unknowns, the exit rates of the neutrals (1/s),
     # the ions by role and the table of the reactions
     _unknown: list[str] = field(init=False, repr=False, compare=False)
@@ -467,6 +506,8 @@ class IonizationRegion:
             raise ValueError("warm_return must be in [0, 1]")
         if self.hot_escape_time is not None and self.hot_escape_time <= 0.0:
             raise ValueError("hot_escape_time must be > 0")
+        if self.pulse_end is not None and self.pulse_end < 0.0:
+            raise ValueError("pulse_end must be >= 0")
         if not self.target.verified:
             warnings.warn(
                 f"{self.target.name}: the IRM rate coefficients, sputter and secondary "
@@ -542,7 +583,7 @@ class IonizationRegion:
         metal_ion_ionization = r.metal_ion_ionization
         if metal_ion_ionization is None:
             metal_ion_ionization = lotz_ionization(
-                self.target.second_ionization_energy, m.outer_electrons
+                self.target.second_ionization, m.outer_electrons
             )
         reactions = []
         for gas in ARGON_GROUND:
@@ -638,7 +679,7 @@ class IonizationRegion:
                 ("e", ion),
                 ("e", "e", ion2),
                 metal_ion_ionization,
-                electron_energy_loss=self.target.second_ionization_energy,
+                electron_energy_loss=self.target.second_ionization,
                 name=f"e + {ion} ionization",
             ),
             Reaction(
@@ -666,6 +707,17 @@ class IonizationRegion:
             ),
         ]
         return reactions
+
+    def back_attraction_at(self, t: float) -> float:
+        """``beta_t`` at the time ``t`` (s): zero after `pulse_end`.
+
+        ``t`` within round-off of `pulse_end` (``"40 us"`` is 3.9999999999999996e-05 s)
+        is still in the pulse.
+        """
+        end = self.pulse_end
+        if end is not None and t > end * (1.0 + 1.0e-12):
+            return 0.0
+        return self.back_attraction
 
     # -- the balances -----------------------------------------------------------------
 
@@ -711,7 +763,7 @@ class IonizationRegion:
         ne = max(n["e"], 1.0)
         vd = float(cast(float, voltage(t) if callable(voltage) else voltage))
         f = self.voltage_fraction
-        beta = self.back_attraction
+        beta = self.back_attraction_at(t)
 
         change = dict.fromkeys(n, 0.0)
         rates: dict[str, float] = {}
@@ -756,10 +808,10 @@ class IonizationRegion:
         energy = {name: species[name].charge * (1.0 - f) * vd for name in self._ions}
         target = self.target
         yields = {
-            ARGON_ION: target.argon_yield(energy[ARGON_ION]),
-            ARGON_ION2: target.argon_yield(energy[ARGON_ION2]),
-            ion: target.metal_yield(energy[ion]),
-            ion2: target.metal_yield(energy[ion2]),
+            ARGON_ION: target.sputter_yield("Ar", energy[ARGON_ION]),
+            ARGON_ION2: target.sputter_yield("Ar", energy[ARGON_ION2]),
+            ion: target.sputter_yield("M", energy[ion]),
+            ion2: target.sputter_yield("M", energy[ion2]),
         }
         sputtered = sum(yields[name] * to_target[name] for name in self._ions)
         secondary = sum(
@@ -804,6 +856,7 @@ class IonizationRegion:
         # d(3/2 n_e T_e)/dt = Q - 2 T_e Gamma_e, newborn electrons without energy
         net = ohmic / (E * volume) - cold_energy - 2.0 * te * electrons_out
         dte = (net - 1.5 * te * dne) / (1.5 * ne)
+        power = E * volume  # W per eV m^-3 s^-1
         return {
             "densities": n,
             "te": te,
@@ -822,6 +875,11 @@ class IonizationRegion:
             "current": drive,
             "voltage": vd,
             "ohmic": ohmic,
+            "collision_power": cold_energy * power,
+            "escape_power": 2.0 * te * electrons_out * power,
+            "stored_power": net * power,
+            "hot_power": hot_energy * power,
+            "back_attraction": beta,
             "dte": dte,
         }
 
@@ -855,8 +913,15 @@ class IonizationRegion:
         (1/s), the cold gas ``inflow`` and the ``warm_return`` (1/s), the
         ``sputtered`` and ``secondary`` electron fluxes (1/s), ``electrons_out``
         and ``hot_escaped`` (1/s, to the bulk), the ``model_current`` and the
-        driving ``current`` (A), the ``voltage`` (V), the ``ohmic`` power (W) and
-        the outputs ``alpha_t``, ``ionized_flux_fraction``,
+        driving ``current`` (A), the ``voltage`` (V), the ``back_attraction``
+        in use, the power balance of the thermal electrons (W): the ``ohmic``
+        heating, the net ``collision_power`` they lose, the ``escape_power`` the
+        electrons that leave carry and the ``stored_power``,
+        ``d(3/2 n_e T_e e V)/dt``, which is the rest; the ``hot_power`` the hot
+        electrons lose in collisions (W), the current at the target by carrier
+        ``target_current`` (A; the ions by name and ``"SE"`` for the secondary
+        electrons) and the outputs ``alpha_t``, ``alpha`` (``alpha_t / beta_t``,
+        the share of the sputtered atoms ionized), ``ionized_flux_fraction``,
         ``self_sputtering_share``, ``rarefaction`` (cold argon over ``n_0``) and
         ``argon_rarefaction`` (all argon atoms over ``n_0``).
         """
@@ -867,15 +932,24 @@ class IonizationRegion:
         to_target, to_bulk = terms["to_target"], terms["to_bulk"]
         sputtered = terms["sputtered"]
         metal_ions_back = to_target[ion] + to_target[ion2]
-        metal_out = terms["neutral_out"][metal] + to_bulk[ion] + to_bulk[ion2]
+        metal_ions_out = to_bulk[ion] + to_bulk[ion2]
+        metal_out = terms["neutral_out"][metal] + metal_ions_out
         fall = (1.0 - self.voltage_fraction) * terms["voltage"]
         self_sputtered = sum(
-            self.target.metal_yield(self.species[k].charge * fall) * to_target[k]
+            self.target.sputter_yield("M", self.species[k].charge * fall) * to_target[k]
             for k in (ion, ion2)
         )
         argon = sum(n[name] for name in (*ARGON_GROUND, METASTABLE))
+        carriers = {
+            name: E * self.species[name].charge * to_target[name] for name in self._ions
+        }
+        carriers["SE"] = E * terms["secondary"]
         terms.update(
+            target_current=carriers,
             alpha_t=metal_ions_back / sputtered if sputtered > 0.0 else 0.0,
+            alpha=(metal_ions_back + metal_ions_out) / sputtered
+            if sputtered > 0.0
+            else 0.0,
             ionized_flux_fraction=(to_bulk[ion] + to_bulk[ion2]) / metal_out
             if metal_out > 0.0
             else 0.0,
@@ -894,6 +968,8 @@ class IonizationRegion:
     ) -> xr.Dataset:
         """The states at ``times`` as a dataset."""
         names = [*self._unknown, "e"]
+        ions = list(self._ions)
+        metal = self.metal[0]
         rows = []
         for t, y in zip(times, columns, strict=True):
             state = dict(zip([*self._unknown, "Te"], np.exp(y), strict=True))
@@ -909,10 +985,47 @@ class IonizationRegion:
                 "Te": variable(
                     "t", [row["Te"] for row in rows], "electron temperature", "eV"
                 ),
+                "target_current": variable(
+                    ("t", "carrier"),
+                    [[row["target_current"][c] for c in [*ions, "SE"]] for row in rows],
+                    "current at the target",
+                    "A",
+                ),
+                "ion_flux_target": variable(
+                    ("t", "ion"),
+                    [[row["to_target"][i] for i in ions] for row in rows],
+                    "ions to the target",
+                    "s^-1",
+                ),
+                "ion_flux_bulk": variable(
+                    ("t", "ion"),
+                    [[row["to_bulk"][i] for i in ions] for row in rows],
+                    "ions to the bulk",
+                    "s^-1",
+                ),
+                "metal_flux_bulk": variable(
+                    "t",
+                    [row["neutral_out"][metal] for row in rows],
+                    "metal atoms to the bulk",
+                    "s^-1",
+                ),
+                "electron_power": variable(
+                    ("t", "term"),
+                    [[row[k] for k in _POWER_TERMS.values()] for row in rows],
+                    "power balance of the thermal electrons",
+                    "W",
+                ),
             },
             coords={
                 "t": ("t", times, {"long_name": "time", "units": "s"}),
                 "species": ("species", names, {"long_name": "species"}),
+                "carrier": (
+                    "carrier",
+                    [*ions, "SE"],
+                    {"long_name": "charge carrier at the target"},
+                ),
+                "ion": ("ion", ions, {"long_name": "ion"}),
+                "term": ("term", list(_POWER_TERMS), {"long_name": "term"}),
             },
         )
         for key, long_name, units in (
@@ -920,6 +1033,9 @@ class IonizationRegion:
             ("model_current", "discharge current of the model", "A"),
             ("voltage", "discharge voltage", "V"),
             ("ohmic", "ohmic heating power", "W"),
+            ("hot_power", "power the hot electrons lose in collisions", "W"),
+            ("back_attraction", r"back-attraction probability $\beta_t$", ""),
+            ("alpha", r"ionization probability $\alpha$", ""),
             ("sputtered", "sputtered atoms", "s^-1"),
             ("secondary", "secondary electrons", "s^-1"),
             ("electrons_out", "thermal electrons to the bulk", "s^-1"),
@@ -934,6 +1050,8 @@ class IonizationRegion:
             back_attraction=self.back_attraction,
             voltage_fraction=self.voltage_fraction,
             metal=self.target.name,
+            metal_ions=[self.metal[1], self.metal[2]],
+            gas_density=self.gas_density,
         )
         return data
 
@@ -959,14 +1077,17 @@ class IonizationRegion:
         model reproduces exactly (synthetic data for `fit`). The integration
         (implicit, in the logarithms of the densities and ``T_e``, so they stay
         positive) starts at ``times[0]`` from ``initial`` (`initial_state` by
-        default) and stops at every ``breakpoints`` time, where the drive jumps.
+        default) and stops at every ``breakpoints`` time, where the drive jumps,
+        and at `pulse_end`.
         """
         times = np.asarray(to_array(times, "s", "times"), dtype=float)
         if times.ndim != 1 or len(times) < 2 or np.any(np.diff(times) <= 0.0):
             raise ValueError("times must be a strictly increasing 1D sequence")
         current, voltage = self._drive(current, voltage)
-        breakpoints = np.atleast_1d(to_array(breakpoints, "s", "breakpoints"))
-        edges = sorted({float(b) for b in breakpoints if times[0] < b < times[-1]})
+        stops = np.atleast_1d(to_array(breakpoints, "s", "breakpoints"))
+        if self.pulse_end is not None:
+            stops = np.append(stops, self.pulse_end)
+        edges = sorted({float(b) for b in stops if times[0] < b < times[-1]})
         edges = [float(times[0]), *edges, float(times[-1])]
         y = self._vector(self.initial_state() if initial is None else initial)
         columns = [y]
@@ -1082,6 +1203,53 @@ class IonizationRegion:
         )
 
 
+def pulse_averages(data: xr.Dataset) -> dict[str, float]:
+    """The time averages of an IRM run (`IonizationRegion.evolve`), as the IRM papers give them.
+
+    The fluxes are integrated over the whole run, so it should cover the pulse and
+    the afterglow until the metal has left. Returns, counting atoms (an ``M2+`` is
+    one atom):
+
+    - ``alpha_t``: ``<alpha_t>``, the metal ions that return to the target over the
+      atoms sputtered;
+    - ``beta_t``: ``<beta_t>``, the metal ions that return to the target over all
+      metal ions that leave the region (lower than ``beta_t`` in the pulse when the
+      afterglow is included, where ``beta_t = 0``);
+    - ``alpha``: ``<alpha>``, the metal ions that leave over the atoms sputtered,
+      so that ``<alpha_t> = <alpha> <beta_t>``;
+    - ``ionized_flux_fraction``: the metal ions over all metal that leaves for the
+      bulk;
+    - ``rarefaction_min`` and ``argon_rarefaction_min``: the lowest cold argon and
+      the lowest argon (every group and the metastables) over the filling density;
+    - ``back_attraction`` and ``voltage_fraction``: ``beta_t`` in the pulse and
+      ``f`` of the run.
+    """
+    t = data.t.values
+    ions = list(data.attrs["metal_ions"])
+
+    def integral(values: xr.DataArray) -> float:
+        return float(np.trapezoid(values.values, t))
+
+    back = integral(data.ion_flux_target.sel(ion=ions).sum("ion"))
+    out = integral(data.ion_flux_bulk.sel(ion=ions).sum("ion"))
+    atoms = integral(data.metal_flux_bulk)
+    sputtered = integral(data.sputtered)
+
+    def ratio(a: float, b: float) -> float:
+        return a / b if b > 0.0 else 0.0
+
+    return {
+        "alpha_t": ratio(back, sputtered),
+        "beta_t": ratio(back, back + out),
+        "alpha": ratio(back + out, sputtered),
+        "ionized_flux_fraction": ratio(out, out + atoms),
+        "rarefaction_min": float(data.rarefaction.min()),
+        "argon_rarefaction_min": float(data.argon_rarefaction.min()),
+        "back_attraction": float(data.attrs["back_attraction"]),
+        "voltage_fraction": float(data.attrs["voltage_fraction"]),
+    }
+
+
 @dataclass(frozen=True)
 class IRMFit:
     """The result of `IonizationRegion.fit`.
@@ -1103,3 +1271,140 @@ class IRMFit:
     relative_rms: float
     success: bool
     evaluations: int
+
+    @property
+    def averages(self) -> dict[str, float]:
+        """The time averages of the fitted run, `pulse_averages`."""
+        return pulse_averages(self.data)
+
+
+@dataclass(frozen=True)
+class IRMCase:
+    """A measured HiPIMS pulse and its device, to fit the IRM to (see `load_case`).
+
+    Attributes:
+        name: A short name, e.g. ``"Gudmundsson 2022, case I"``.
+        times: The sample times in s.
+        current: The discharge current ``I_D`` at the samples in A.
+        voltage: The discharge voltage ``V_D`` at the samples in V.
+        settings: Keyword arguments of `IonizationRegion` (the geometry, the
+            pressure, `pulse_end`, a first guess of ``beta_t`` and ``f``), numbers
+            or strings with units such as ``"6 mm"``.
+        reference: The published results to compare with, by the keys of
+            `pulse_averages` (fractions, not percent).
+        source: Where the data come from.
+        placeholder: ``True`` while the waveforms are not the measured ones.
+    """
+
+    name: str
+    times: np.ndarray
+    current: np.ndarray
+    voltage: np.ndarray
+    settings: Mapping[str, Any] = field(default_factory=dict)
+    reference: Mapping[str, float] = field(default_factory=dict)
+    source: str = ""
+    placeholder: bool = False
+
+    def region(self, **overrides: Any) -> IonizationRegion:
+        """The `IonizationRegion` of the case, with ``overrides`` of its settings."""
+        return IonizationRegion(**{**self.settings, **overrides})
+
+    def fit(
+        self,
+        region: IonizationRegion | None = None,
+        *,
+        seed: float = 1.0e17,
+        **options: Any,
+    ) -> IRMFit:
+        """Fit ``beta_t`` and ``f`` of ``region`` (`region` by default) to the pulse.
+
+        The run starts from `IonizationRegion.initial_state` with the seed ion
+        density ``seed`` (m^-3); ``options`` go to `IonizationRegion.fit`.
+        """
+        region = self.region() if region is None else region
+        return region.fit(
+            self.times,
+            self.current,
+            self.voltage,
+            region.initial_state(seed),
+            **options,
+        )
+
+
+#: The settings of a case file that `IonizationRegion` takes.
+_REGION_FIELDS = {
+    f.name
+    for f in dataclasses.fields(IonizationRegion)
+    if f.init and f.name not in ("target", "rates")
+}
+_KEY = re.compile(r"^#\s*([A-Za-z_][\w.]*)\s*=\s*(.*?)\s*$")
+
+
+def load_case(path: str | Path) -> IRMCase:
+    """Read a pulse and its device from one CSV file.
+
+    The file has ``# key = value`` lines, then a header and the samples::
+
+        # name = Gudmundsson 2022, case I
+        # source = Surf. Coat. Technol. 442, 128189 (2022), Fig. 2a
+        # placeholder = false
+        # inner_radius = 6 mm
+        # pressure = 0.5 Pa
+        # pulse_end = 40 us
+        # reference.alpha_t = 0.61
+        time_us,current_A,voltage_V
+        0.0,0.0,620.0
+        ...
+
+    Keys: ``name``, ``source``, ``placeholder`` (``true``/``false``), every setting
+    of `IonizationRegion` but the target and the rates (a number or a string with
+    a unit), and ``reference.<key>`` for the published values (the keys of
+    `pulse_averages`). Other comment lines are notes. Warns when the waveforms
+    are placeholders.
+    """
+    path = Path(path)
+    meta: dict[str, str] = {}
+    rows = []
+    for line in path.read_text().splitlines():
+        match = _KEY.match(line)
+        if match:
+            meta[match.group(1)] = match.group(2)
+        elif line.strip() and not line.lstrip().startswith("#"):
+            rows.append([cell.strip() for cell in line.split(",")])
+    columns = ["time_us", "current_A", "voltage_V"]
+    if not rows or rows[0] != columns:
+        raise ValueError(f"{path}: need the header {','.join(columns)}")
+    table = np.array(rows[1:], dtype=float).reshape(-1, 3)
+    name = meta.pop("name", path.stem)
+    source = meta.pop("source", "")
+    placeholder = meta.pop("placeholder", "false").lower() == "true"
+    reference = {
+        key.removeprefix("reference."): float(meta.pop(key))
+        for key in list(meta)
+        if key.startswith("reference.")
+    }
+    unknown = set(meta) - _REGION_FIELDS
+    if unknown:
+        raise ValueError(f"{path}: unknown keys {', '.join(sorted(unknown))}")
+    settings: dict[str, Any] = {}
+    for key, value in meta.items():
+        try:
+            settings[key] = float(value)
+        except ValueError:
+            settings[key] = value
+    if placeholder:
+        warnings.warn(
+            f"{name}: the waveforms are placeholders, not data",
+            UserWarning,
+            stacklevel=2,
+        )
+    return IRMCase(
+        name=name,
+        times=1.0e-6 * table[:, 0],
+        current=table[:, 1],
+        voltage=table[:, 2],
+        settings=settings,
+        reference=reference,
+        source=source,
+        placeholder=placeholder,
+    )

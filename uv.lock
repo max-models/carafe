@@ -3370,6 +3370,8 @@ dev = [
     { name = "simgeometry" },
 ]
 docs = [
+    { name = "astropy", version = "6.1.7", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "astropy", version = "8.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "griffe" },
     { name = "ipykernel", version = "7.3.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "ipykernel", version = "7.4.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
@@ -3403,6 +3405,7 @@ test = [
 
 [package.metadata]
 requires-dist = [
+    { name = "astropy", marker = "extra == 'docs'" },
     { name = "astropy", marker = "extra == 'test'" },
     { name = "cunumpy", git = "https://github.com/max-models/cunumpy?branch=devel" },
     { name = "griffe", marker = "extra == 'docs'" },

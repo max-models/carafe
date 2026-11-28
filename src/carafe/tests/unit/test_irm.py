@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import dataclasses
 from collections import Counter
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -14,10 +15,12 @@ from carafe.irm import (
     IonizationRegion,
     IRMRates,
     IRMTarget,
-    SputterYield,
+    load_case,
+    pulse_averages,
     waveform,
 )
-from carafe.magnetron import lotz_ionization
+from carafe.magnetron import COPPER, lotz_ionization
+from carafe.sputtering import ConstantYield, PowerLawYield
 
 E = ELEMENTARY_CHARGE
 pytestmark = pytest.mark.filterwarnings("ignore:.*placeholders, not data")
@@ -63,12 +66,20 @@ def mean_speed(temperature_ev: float, mass_u: float) -> float:
     return np.sqrt(8.0 * E * temperature_ev / (np.pi * mass_u * ATOMIC_MASS))
 
 
-def test_the_sputter_yield_is_a_power_law() -> None:
-    fit = SputterYield(0.07, 0.55)
-    assert fit(400.0) == pytest.approx(0.07 * 400.0**0.55)
-    assert fit(0.0) == 0.0 and fit(-5.0) == 0.0
-    with pytest.raises(ValueError, match="sputter yield"):
-        SputterYield(0.1, 0.0)
+def test_the_target_takes_the_yields_and_the_second_ionization_of_the_material() -> (
+    None
+):
+    target = IRMTarget()
+    assert target.second_ionization == pytest.approx(20.29)
+    assert target.sputter_yield("Ar", 500.0) == pytest.approx(2.0)
+    assert target.sputter_yield("M", 500.0) == pytest.approx(2.2)
+    custom = IRMTarget(argon_yield=PowerLawYield(0.07, 0.55))
+    assert custom.sputter_yield("Ar", 400.0) == pytest.approx(0.07 * 400.0**0.55)
+    with pytest.raises(ValueError, match="second ionization"):
+        IRMTarget(second_ionization_energy=5.0)
+    bare = dataclasses.replace(COPPER, second_ionization_energy=None)
+    with pytest.raises(ValueError, match="no second ionization"):
+        IRMTarget(material=bare)
 
 
 def test_a_waveform_interpolates_the_samples() -> None:
@@ -92,6 +103,7 @@ def test_the_target_and_the_region_are_validated() -> None:
         {"inner_radius": 0.03},
         {"warm_return": 2.0},
         {"hot_escape_time": -1.0},
+        {"pulse_end": -1.0},
     ):
         with pytest.raises(ValueError):
             IonizationRegion(**bad)
@@ -221,8 +233,8 @@ def test_without_sputtering_the_metal_plays_no_part() -> None:
     def run(factor: float):
         target = dataclasses.replace(
             COPPER_TARGET,
-            argon_yield=SputterYield(0.0, 0.5),
-            metal_yield=SputterYield(0.0, 0.5),
+            argon_yield=ConstantYield(0.0),
+            metal_yield=ConstantYield(0.0),
         )
         rate = lotz_ionization(7.726, 1)
         rates = IRMRates(metal_ionization=lambda te: factor * rate(te))
@@ -267,3 +279,186 @@ def test_the_fit_recovers_the_parameters_of_synthetic_data() -> None:
     assert fit.voltage_fraction == pytest.approx(0.18, abs=2.0e-3)
     assert fit.relative_rms < 2.0e-3
     assert fit.region.back_attraction == fit.back_attraction
+
+
+@pytest.fixture(scope="module")
+def afterglow() -> tuple[IonizationRegion, object]:
+    """A pulse that ends at ``ON``, with no back-attraction in the afterglow."""
+    region = IonizationRegion(back_attraction=0.5, voltage_fraction=0.15, pulse_end=ON)
+    times = np.linspace(0.0, 120.0e-6, 61)
+    return region, region.evolve(times, current, voltage)
+
+
+def test_the_current_at_the_target_is_its_carriers(pulse) -> None:
+    assert list(pulse.carrier.values) == ["Ar+", "Ar2+", "Cu+", "Cu2+", "SE"]
+    np.testing.assert_allclose(
+        pulse.target_current.sum("carrier"), pulse.model_current, rtol=1.0e-12
+    )
+    np.testing.assert_allclose(
+        pulse.target_current.isel(carrier=slice(0, 4)).values,
+        E * pulse.ion_flux_target.values * np.array([1, 2, 1, 2]),
+        rtol=1.0e-12,
+    )
+    # argon ions carry most of the current, with secondary electrons
+    peak = pulse.target_current.sel(t=0.9 * ON, method="nearest")
+    assert float(peak.sel(carrier="Ar+")) > float(peak.sel(carrier="Ar2+"))
+    assert float(peak.sel(carrier="SE")) > 0.0
+
+
+def test_after_the_pulse_no_ion_returns_to_the_target(afterglow) -> None:
+    region, data = afterglow
+    assert region.back_attraction_at(0.5 * ON) == 0.5
+    assert region.back_attraction_at(2.0 * ON) == 0.0
+    after = data.where(data.t > ON + 1.0e-9, drop=True)
+    assert np.all(after.back_attraction.values == 0.0)
+    assert np.all(after.ion_flux_target.values == 0.0)
+    assert np.all(after.model_current.values == 0.0)
+    # the metal keeps leaving for the bulk until the region is empty
+    assert float(after.ion_flux_bulk.sel(ion="Cu+")[0]) > 0.0
+    metal = data.density.sel(species="Cu")
+    assert float(metal[-1]) < 1.0e-2 * float(metal.max())
+
+
+def test_the_electron_power_balances(region: IonizationRegion) -> None:
+    # start at 5 us, past the seed state
+    start = region.evolve([0.0, 5.0e-6], current, voltage)
+    *_, (_, initial) = states(region, start)
+    times = np.linspace(5.0e-6, 45.0e-6, 401)
+    data = region.evolve(times, current, voltage, initial, rtol=1.0e-9)
+    power = data.electron_power
+    np.testing.assert_allclose(
+        power.sel(term="ohmic"),
+        power.sel(term=["collisions", "escape", "stored"]).sum("term"),
+        rtol=1.0e-9,
+    )
+    # the stored power is d(3/2 n_e T_e e V)/dt
+    energy = 1.5 * E * region.volume * data.density.sel(species="e") * data.Te
+    derivative = np.gradient(energy.values, times)
+    inner = slice(10, -10)
+    scale = float(power.sel(term="ohmic").max())
+    np.testing.assert_allclose(
+        derivative[inner],
+        power.sel(term="stored").values[inner],
+        atol=1.0e-2 * scale,
+    )
+    assert np.all(power.sel(term=["ohmic", "escape"]).values >= 0.0)
+    assert np.all(data.hot_power.values >= 0.0)
+
+
+def test_the_pulse_averages_are_those_of_the_irm_papers(afterglow) -> None:
+    region, data = afterglow
+    averages = pulse_averages(data)
+    for key in ("alpha_t", "beta_t", "alpha", "ionized_flux_fraction"):
+        assert 0.0 < averages[key] < 1.0, key
+    assert averages["alpha_t"] == pytest.approx(averages["alpha"] * averages["beta_t"])
+    # the afterglow, with beta_t = 0, lowers the average below the pulse's value
+    assert averages["beta_t"] < averages["back_attraction"] == 0.5
+    assert averages["voltage_fraction"] == 0.15
+    assert averages["rarefaction_min"] == pytest.approx(float(data.rarefaction.min()))
+    assert averages["argon_rarefaction_min"] >= averages["rarefaction_min"]
+    # alpha = alpha_t / beta_t at every instant of the pulse
+    pulse = data.where((data.t > 0.0) & (data.t < ON), drop=True)
+    np.testing.assert_allclose(
+        pulse.alpha_t, pulse.alpha * pulse.back_attraction, rtol=1.0e-10
+    )
+
+
+def test_without_sputtering_the_averages_are_zero() -> None:
+    target = dataclasses.replace(
+        COPPER_TARGET,
+        argon_yield=PowerLawYield(0.0, 0.5),
+        metal_yield=PowerLawYield(0.0, 0.5),
+    )
+    region = IonizationRegion(target=target, back_attraction=0.5, pulse_end=ON)
+    data = region.evolve(TIMES, current, voltage)
+    averages = pulse_averages(data)
+    assert averages["alpha_t"] == averages["alpha"] == 0.0
+    assert np.all(data.alpha.values == 0.0)
+
+
+CASE = """# A test pulse.
+# name = test case
+# source = synthetic
+# placeholder = {placeholder}
+# inner_radius = 8 mm
+# pressure = 1 Pa
+# pulse_end = 10 us
+# back_attraction = 0.5
+# voltage_fraction = 0.18
+# reference.alpha_t = 0.5
+time_us,current_A,voltage_V
+"""
+
+
+def write_case(path: Path, times, current, voltage, placeholder: str = "false"):
+    rows = "".join(
+        f"{1.0e6 * t:.6g},{i:.9g},{v:.9g}\n"
+        for t, i, v in zip(times, current, voltage, strict=True)
+    )
+    path.write_text(CASE.format(placeholder=placeholder) + rows)
+    return path
+
+
+def test_a_case_is_read_from_one_file(tmp_path: Path) -> None:
+    path = write_case(tmp_path / "case.csv", [0.0, 5.0e-6], [0.0, 10.0], [400.0, 400.0])
+    case = load_case(path)
+    assert case.name == "test case" and case.source == "synthetic"
+    assert not case.placeholder
+    np.testing.assert_allclose(case.times, [0.0, 5.0e-6])
+    np.testing.assert_allclose(case.current, [0.0, 10.0])
+    assert case.reference == {"alpha_t": 0.5}
+    region = case.region(height="2 cm")
+    assert region.inner_radius == pytest.approx(0.008)
+    assert region.pressure == 1.0 and region.height == pytest.approx(0.02)
+    assert region.pulse_end == pytest.approx(10.0e-6)
+    assert region.voltage_fraction == 0.18
+    with pytest.warns(UserWarning, match="placeholders"):
+        load_case(write_case(tmp_path / "p.csv", [0, 1e-6], [0, 1], [1, 1], "true"))
+    (tmp_path / "bad.csv").write_text("# volume = 3\ntime_us,current_A,voltage_V\n")
+    with pytest.raises(ValueError, match="unknown keys volume"):
+        load_case(tmp_path / "bad.csv")
+    (tmp_path / "header.csv").write_text("# name = x\nt,I,V\n0,0,0\n")
+    with pytest.raises(ValueError, match="header"):
+        load_case(tmp_path / "header.csv")
+
+
+def test_the_copper_case_ships_with_the_examples() -> None:
+    path = Path(__file__).parents[4] / "examples" / "data" / "irm_copper_case1.csv"
+    with pytest.warns(UserWarning, match="placeholders"):
+        case = load_case(path)
+    assert case.placeholder
+    region = case.region()
+    # Table 4 of Gudmundsson et al. (2022), the 2 inch target
+    assert (region.inner_radius, region.outer_radius) == pytest.approx((0.006, 0.02))
+    assert (region.sheath_height, region.height) == pytest.approx((0.002, 0.028))
+    assert region.pulse_end == pytest.approx(40.0e-6)
+    assert set(case.reference) <= {
+        "alpha_t",
+        "beta_t",
+        "alpha",
+        "ionized_flux_fraction",
+        "rarefaction_min",
+        "argon_rarefaction_min",
+        "back_attraction",
+        "voltage_fraction",
+    }
+    assert case.current.max() == pytest.approx(20.0, rel=0.05)
+
+
+def test_a_case_fits_its_pulse(tmp_path: Path) -> None:
+    true = IonizationRegion(back_attraction=0.5, voltage_fraction=0.18, pulse_end=10e-6)
+    times = np.linspace(0.0, 15.0e-6, 31)
+    initial = true.initial_state(1.0e17)
+    synthetic = true.evolve(times, None, lambda t: 400.0 if t < 10e-6 else 0.0, initial)
+    case = load_case(
+        write_case(
+            tmp_path / "case.csv",
+            times,
+            synthetic.model_current.values,
+            synthetic.voltage.values,
+        )
+    )
+    fit = case.fit(guess=(0.45, 0.17), tolerance=1.0e-3)
+    assert fit.back_attraction == pytest.approx(0.5, abs=0.03)
+    assert fit.voltage_fraction == pytest.approx(0.18, abs=0.02)
+    assert fit.averages["back_attraction"] == fit.back_attraction
