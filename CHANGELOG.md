@@ -7,6 +7,15 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- `MHD2D` computes the primitive variables and their positivity check, the stable step, and
+  the resistive and Braginskii-conductive face terms in compiled kernels too
+  (`mhd_primitive`, `mhd_rate`, `mhd_resistive`, `mhd_conductive`), writes the fluxes into
+  work arrays kept per patch instead of new arrays and dicts of slices, and keeps the start
+  values of the Heun step in place: a step of the Orszag–Tang vortex on 256 x 256 cells from
+  65 ms to 54 ms, on 128 x 128 from 16.5 ms to 13.5 ms, and of resistive Harris sheets with
+  conduction on 256 x 256 from 82 ms to 63 ms, with bit-for-bit the same results. New
+  profiling regions `carafe.mhd_stable_step`, `carafe.mhd_halos` and `carafe.mhd_fluxes`,
+  and the tutorial "MHD performance" (the step-time breakdown with scope-profiler).
 - `MHD2D`'s MUSCL reconstruction, HLLD fluxes and CT-contact electric field run as compiled
   kernels (`carafe.kernels`: Pyccel through cunumpy, NumPy where Pyccel is missing; the
   extra `plasma-carafe[pyccel]`): a step of the Orszag–Tang vortex on 256 x 256 cells from

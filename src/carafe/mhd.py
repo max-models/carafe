@@ -69,9 +69,10 @@ face-normal field taken from :math:`A_z`, the electric field at the nodes by the
 upwind "CT-contact" average of the face fluxes (Gardiner and Stone 2005), Heun's
 method (SSP-RK2), and refluxing (`patchwork.FluxRegister`) at coarse–fine faces.
 Where a reconstructed density or pressure is not positive the face falls back to
-first order. The reconstruction, the Riemann solver and the CT-contact average run as
+first order. The primitive variables, the reconstruction, the Riemann solver, the
+CT-contact average, the resistive and conductive face terms and the stable step run as
 compiled kernels over whole blocks (``carafe.kernels``: Pyccel through cunumpy, their
-NumPy versions where Pyccel is missing). The resistive and conductive terms are explicit
+NumPy versions where Pyccel is missing), on work arrays kept per patch. The resistive and conductive terms are explicit
 (``J_z`` at the nodes from the face fields, ``J_x``, ``J_y`` at the faces from ``B_z``),
 and the step keeps within the diffusion limit of the finest cells.
 
@@ -108,6 +109,10 @@ from scope_profiler import profile
 from carafe._profiling import _PROFILE_TAGS
 from carafe.datasets import variable
 from carafe.kernels.ct_contact import kernel as ct_contact
+from carafe.kernels.mhd_conductive import kernel as mhd_conductive
+from carafe.kernels.mhd_primitive import kernel as mhd_primitive
+from carafe.kernels.mhd_rate import kernel as mhd_rate
+from carafe.kernels.mhd_resistive import kernel as mhd_resistive
 from carafe.kernels.mhd_sweep import LIMITER_CODES
 from carafe.kernels.mhd_sweep import kernel as mhd_sweep
 from carafe.limiters import LIMITERS
@@ -123,6 +128,10 @@ HALO = 2
 CONSERVED = ("density", "momentum_x", "momentum_y", "momentum_z", "energy", "bz")
 #: The boundary kinds of a non-periodic axis.
 BOUNDARIES = ("outflow", "wall")
+#: The rows of the x- and y-sweep fluxes (``mhd_sweep``) of each conserved field.
+_FLUX_ROWS = ((0, 1, 2, 3, 4, 6), (0, 2, 1, 3, 4, 6))
+#: The flux rows zeroed at a wall: all but the normal momentum and normal-field rows.
+_WALL_ROWS = [0, 2, 3, 4, 6]
 #: Relative size below which the HLLD star-state denominator counts as zero.
 _DEGENERATE = 1.0e-12
 
@@ -342,30 +351,6 @@ def _wall_nodes(array: np.ndarray, axis: int, lower: bool, upper: bool) -> None:
             moved[n - h - 1 + k] = 2.0 * wall - moved[n - h - 1 - k]
 
 
-def _transverse_gradient(t: np.ndarray, axis: int, spacing: float) -> np.ndarray:
-    """Limited gradient across the faces normal to ``axis`` (Sharma and Hammett 2007).
-
-    For the faces between cells ``k - 1`` and ``k`` along ``axis`` (``k = 2 .. n -
-    2``, as the ``mhd_sweep`` kernel), the derivative along the other axis: the
-    monotonized-central limiter of the four one-sided differences of the two cells.
-    Zero in the first and last row across, which no block face uses.
-    """
-    mc = LIMITERS["mc"]
-    other = 1 - axis
-    moved = np.moveaxis(t, other, 0)  # the transverse axis first
-    forward = np.zeros_like(moved)
-    backward = np.zeros_like(moved)
-    forward[1:-1] = (moved[2:] - moved[1:-1]) / spacing
-    backward[1:-1] = (moved[1:-1] - moved[:-2]) / spacing
-    per_cell = np.moveaxis(mc(forward, backward), 0, other)
-    index_low = [slice(None)] * 2
-    index_high = [slice(None)] * 2
-    n = t.shape[axis]
-    index_low[axis] = slice(1, n - 2)
-    index_high[axis] = slice(2, n - 1)
-    return mc(per_cell[tuple(index_low)], per_cell[tuple(index_high)])
-
-
 # The model -----------------------------------------------------------------------#
 @method(
     equations={
@@ -488,6 +473,7 @@ class MHD2D:
 
         self.periodic = tuple(hierarchy.periodic)
         self.register = FluxRegister(hierarchy)
+        self._work: dict[tuple, dict[str, Any]] = {}
         self.time = 0.0
         self.steps = 0
         #: The period of the wave `alfven_wave` sets up (NaN otherwise).
@@ -753,6 +739,7 @@ class MHD2D:
             raise RuntimeError("set the state first (set_state)")
 
     # Halos and boundaries ---------------------------------------------------#
+    @profile("carafe.mhd_halos", tags=_PROFILE_TAGS)
     def _fill_halos(self) -> None:
         """Halos from the hierarchy, then the outflow faces and walls of the domain."""
         hierarchy = self.hierarchy
@@ -788,25 +775,50 @@ class MHD2D:
                 _wall_nodes(potential, axis, lower, upper)
 
     # Primitive variables -----------------------------------------------------#
-    def _primitive(self, patch: Patch) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """Primitive variables of a patch with its halo, and the face fields."""
+    def _buffers(self, patch: Patch) -> dict[str, Any]:
+        """The work arrays of a patch, kept from step to step (cleared by `regrid`)."""
+        key = (patch.level, tuple(patch.box))
+        work = self._work.get(key)
+        if work is None:
+            nx, ny = patch.shape
+            cells = (nx + 2 * HALO, ny + 2 * HALO)
+            work = {
+                "prim": np.empty((8, *cells)),
+                "bxf": np.empty((cells[0] + 1, cells[1])),
+                "byf": np.empty((cells[0], cells[1] + 1)),
+                "ecc": np.empty(cells),
+                "fx": np.empty((7, cells[0] - 3, cells[1])),
+                "fy": np.empty((7, cells[0], cells[1] - 3)),
+                "ez": np.empty((nx + 1, ny + 1)),
+                "start": {},
+            }
+            self._work[key] = work
+        return work
+
+    def _primitive(
+        self, patch: Patch
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, int]:
+        """Primitive variables of a patch with its halo, the face fields and the bad cells.
+
+        The arrays are the patch's work arrays (`_buffers`), overwritten by the next
+        call; the count is that of the cells whose density or pressure is not
+        positive or whose variables are not finite.
+        """
         dx, dy = self.hierarchy.spacing(patch.level)
-        cons = np.stack(
-            [patch.field(self.names[name]).local_with_halos for name in CONSERVED]
+        work = self._buffers(patch)
+        bad = mhd_primitive(
+            *(patch.field(self.names[name]).local_with_halos for name in CONSERVED),
+            patch.field(self.potential).local_with_halos,
+            dx,
+            dy,
+            *self.mean_field,
+            self.gamma,
+            work["prim"],
+            work["bxf"],
+            work["byf"],
+            work["ecc"],
         )
-        az = patch.field(self.potential).local_with_halos
-        bxf = (az[:, 1:] - az[:, :-1]) / dy + self.mean_field[0]
-        byf = -(az[1:, :] - az[:-1, :]) / dx + self.mean_field[1]
-        bx = 0.5 * (bxf[:-1] + bxf[1:])
-        by = 0.5 * (byf[:, :-1] + byf[:, 1:])
-        rho = cons[0]
-        u, v, w = cons[1] / rho, cons[2] / rho, cons[3] / rho
-        bz = cons[5]
-        p = (self.gamma - 1.0) * (
-            cons[4] - 0.5 * rho * (u**2 + v**2 + w**2) - 0.5 * (bx**2 + by**2 + bz**2)
-        )
-        prim = np.stack((rho, u, v, w, p, bx, by, bz))
-        return prim, bxf, byf
+        return work["prim"], work["bxf"], work["byf"], int(bad)
 
     # The right-hand side -------------------------------------------------------#
     def _current(self, bxf: np.ndarray, byf: np.ndarray, level: int) -> np.ndarray:
@@ -815,44 +827,6 @@ class MHD2D:
         return (byf[1:, 1:-1] - byf[:-1, 1:-1]) / dx - (
             bxf[1:-1, 1:] - bxf[1:-1, :-1]
         ) / dy
-
-    def _resistive(self, prim, bxf, byf, patch: Patch) -> dict[str, Any]:
-        """The resistive parts of ``E_z`` at the block's nodes and of the face fluxes.
-
-        ``eta J_z`` at the nodes; the flux of ``B_z`` gains ``eta J_y`` along x and
-        ``-eta J_x`` along y (``B_z`` diffuses), the energy flux ``eta J x B``.
-        """
-        eta = self.resistivity
-        h = HALO
-        nx, ny = patch.shape
-        dx, dy = self.hierarchy.spacing(patch.level)
-        _, _, _, _, _, bx, by, bz = prim
-        jz = self._current(bxf, byf, patch.level)
-        # x-faces I = h .. h + nx between cells I - 1 and I, rows h .. h + ny - 1
-        right, left, rows = slice(h, h + nx + 1), slice(h - 1, h + nx), slice(h, h + ny)
-        jy = -(bz[right, rows] - bz[left, rows]) / dx
-        bz_x = 0.5 * (bz[right, rows] + bz[left, rows])
-        by_x = 0.5 * (by[right, rows] + by[left, rows])
-        jz_x = 0.5 * (
-            jz[h - 1 : h + nx, h - 1 : h + ny - 1] + jz[h - 1 : h + nx, h : h + ny]
-        )
-        # y-faces J = h .. h + ny between cells J - 1 and J, columns h .. h + nx - 1
-        upper, lower, cols = (
-            slice(h, h + ny + 1),
-            slice(h - 1, h + ny),
-            slice(h, h + nx),
-        )
-        jx = (bz[cols, upper] - bz[cols, lower]) / dy
-        bz_y = 0.5 * (bz[cols, upper] + bz[cols, lower])
-        bx_y = 0.5 * (bx[cols, upper] + bx[cols, lower])
-        jz_y = 0.5 * (
-            jz[h - 1 : h + nx - 1, h - 1 : h + ny] + jz[h : h + nx, h - 1 : h + ny]
-        )
-        return {
-            "ez": eta * jz[h - 1 : h + nx, h - 1 : h + ny],
-            "x": {"bz": eta * jy, "energy": eta * (jy * bz_x - jz_x * by_x)},
-            "y": {"bz": -eta * jx, "energy": eta * (jz_y * bx_y - jx * bz_y)},
-        }
 
     def _wall_sides(self, patch: Patch) -> tuple[tuple[bool, bool], ...]:
         """Whether the lower and upper faces of the patch along each axis are walls."""
@@ -865,111 +839,50 @@ class MHD2D:
             for axis in range(2)
         )
 
-    def _conductive(self, prim, bxf, byf, fx, fy, dx, dy) -> None:
-        """Add the Braginskii heat flux to the energy fluxes ``fx`` and ``fy``."""
-        parallel, perpendicular = self.conduction
-        t = prim[4] / prim[0]
-        bx, by, bz = prim[5], prim[6], prim[7]
-        tiny = np.finfo(float).tiny
-        # x-faces 2 .. X - 2
-        bn = bxf[2:-2, :]
-        bt = 0.5 * (by[1:-2] + by[2:-1])
-        bzf = 0.5 * (bz[1:-2] + bz[2:-1])
-        magnitude = np.sqrt(bn**2 + bt**2 + bzf**2)
-        b_n, b_t = bn / np.maximum(magnitude, tiny), bt / np.maximum(magnitude, tiny)
-        normal = (t[2:-1] - t[1:-2]) / dx
-        across = _transverse_gradient(t, 0, dy)
-        fx[4] -= parallel * b_n * (b_n * normal + b_t * across) + perpendicular * normal
-        # y-faces 2 .. Y - 2
-        bn = byf[:, 2:-2]
-        bt = 0.5 * (bx[:, 1:-2] + bx[:, 2:-1])
-        bzf = 0.5 * (bz[:, 1:-2] + bz[:, 2:-1])
-        magnitude = np.sqrt(bn**2 + bt**2 + bzf**2)
-        b_n, b_t = bn / np.maximum(magnitude, tiny), bt / np.maximum(magnitude, tiny)
-        normal = (t[:, 2:-1] - t[:, 1:-2]) / dy
-        across = _transverse_gradient(t, 1, dx)
-        fy[4] -= parallel * b_n * (b_n * normal + b_t * across) + perpendicular * normal
+    @profile("carafe.mhd_fluxes", tags=_PROFILE_TAGS)
+    def _patch_fluxes(self, patch: Patch) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """The face fluxes of a patch's haloed block and the electric field at its nodes.
 
-    def _patch_fluxes(self, patch: Patch) -> dict[str, Any]:
-        """The face fluxes of a patch's cells and the electric field at its nodes."""
-        prim, bxf, byf = self._primitive(patch)
-        if (
-            np.any(prim[0] <= 0.0)
-            or np.any(prim[4] <= 0.0)
-            or not np.all(np.isfinite(prim))
-        ):
+        ``fx`` and ``fy`` as the ``mhd_sweep`` kernel gives them (block x-face ``k`` at
+        ``fx[:, k]``, block y-face ``k`` at ``fy[:, :, k]``), with the resistive and
+        conductive parts and the walls; the patch's work arrays (`_buffers`).
+        """
+        prim, bxf, byf, bad = self._primitive(patch)
+        if bad:
             raise FloatingPointError(
                 f"non-positive density or pressure on the level-{patch.level} patch "
                 f"{patch.box} at t = {self.time}"
             )
-        nx, ny = patch.shape
-        h = HALO
-        gamma = self.gamma
-        _, u, v, _, _, bx, by, _ = prim
+        work = self._buffers(patch)
+        fx, fy, ez = work["fx"], work["fy"], work["ez"]
         code = LIMITER_CODES.index(self.limiter)
         # x-sweep (normal x, tangential (y, z)): x-faces 2 .. X - 2, all rows; fx[:, k]
         # at x-face k + 2 of the haloed block, i.e. block face k + 2 - h
-        fx = np.empty((7, prim.shape[1] - 3, prim.shape[2]))
-        mhd_sweep(prim, bxf, 0, code, gamma, fx)
+        mhd_sweep(prim, bxf, 0, code, self.gamma, fx)
         # y-sweep (normal y, tangential (x, z)): all columns, y-faces 2 .. Y - 2
-        fy = np.empty((7, prim.shape[1], prim.shape[2] - 3))
-        mhd_sweep(prim, byf, 1, code, gamma, fy)
-        ecc = bx * v - by * u
+        mhd_sweep(prim, byf, 1, code, self.gamma, fy)
         # the x-flux of B_y is -E_z, the y-flux of B_x is +E_z
-        ez = np.empty((nx + 1, ny + 1))
-        ct_contact(fx[5], fy[5], fx[0], fy[0], ecc, ez)
-        resistive = self._resistive(prim, bxf, byf, patch) if self.resistivity else None
-        if resistive is not None:
-            ez = ez + resistive["ez"]
+        ct_contact(fx[5], fy[5], fx[0], fy[0], work["ecc"], ez)
+        dx, dy = self.hierarchy.spacing(patch.level)
         if max(self.conduction) > 0.0:
-            dx, dy = self.hierarchy.spacing(patch.level)
-            self._conductive(prim, bxf, byf, fx, fy, dx, dy)
-        walls = self._wall_sides(patch)
-        if walls[0][0]:
+            mhd_conductive(prim, bxf, byf, dx, dy, *self.conduction, fx, fy)
+        if self.resistivity:
+            mhd_resistive(prim, bxf, byf, dx, dy, self.resistivity, fx, fy, ez)
+        # nothing but the pressure crosses a wall, and E_z along it is zero
+        (left, right), (bottom, top) = self._wall_sides(patch)
+        if left:
             ez[0, :] = 0.0
-        if walls[0][1]:
+            fx[_WALL_ROWS, 0, :] = 0.0
+        if right:
             ez[-1, :] = 0.0
-        if walls[1][0]:
+            fx[_WALL_ROWS, -1, :] = 0.0
+        if bottom:
             ez[:, 0] = 0.0
-        if walls[1][1]:
+            fy[_WALL_ROWS, :, 0] = 0.0
+        if top:
             ez[:, -1] = 0.0
-        sx = slice(h, h + ny)  # block rows (x-faces)
-        sy = slice(h, h + nx)  # block columns (y-faces)
-        xf = slice(0, nx + 1)  # block x-faces 0 .. nx: fx index k = face + h - 2
-        yf = slice(0, ny + 1)
-        flux_x = {
-            "density": fx[0, xf, sx],
-            "momentum_x": fx[1, xf, sx],
-            "momentum_y": fx[2, xf, sx],
-            "momentum_z": fx[3, xf, sx],
-            "energy": fx[4, xf, sx],
-            "bz": fx[6, xf, sx],
-        }
-        flux_y = {
-            "density": fy[0, sy, yf],
-            "momentum_x": fy[2, sy, yf],
-            "momentum_y": fy[1, sy, yf],
-            "momentum_z": fy[3, sy, yf],
-            "energy": fy[4, sy, yf],
-            "bz": fy[6, sy, yf],
-        }
-        if resistive is not None:
-            for name in ("bz", "energy"):
-                flux_x[name] = flux_x[name] + resistive["x"][name]
-                flux_y[name] = flux_y[name] + resistive["y"][name]
-        # nothing but the pressure crosses a wall
-        tangential = ("momentum_y", "momentum_x")
-        for axis, flux in enumerate((flux_x, flux_y)):
-            for side, at in ((0, 0), (1, -1)):
-                if not walls[axis][side]:
-                    continue
-                for name in ("density", "energy", "bz", tangential[axis], "momentum_z"):
-                    part = flux[name] = flux[name].copy()
-                    if axis == 0:
-                        part[at, :] = 0.0
-                    else:
-                        part[:, at] = 0.0
-        return {"x": flux_x, "y": flux_y, "ez": ez}
+            fy[_WALL_ROWS, :, -1] = 0.0
+        return fx, fy, ez
 
     def _advance(self, dt: float, scale: float) -> None:
         """One forward-Euler stage of every patch, recorded with ``scale``."""
@@ -986,18 +899,25 @@ class MHD2D:
                 mx = patch.field(self.names["momentum_x"]).local
                 my = patch.field(self.names["momentum_y"]).local
                 sources[id(patch)] = (rho * gx, rho * gy, (mx * gx + my * gy).copy())
-        for name in CONSERVED:
+        h = HALO
+
+        def block_fluxes(patch: Patch, x_row: int, y_row: int):
+            nx, ny = patch.shape
+            fx, fy, _ = fluxes[id(patch)]
+            return fx[x_row, :, h : h + ny], fy[y_row, h : h + nx, :]
+
+        for name, x_row, y_row in zip(CONSERVED, *_FLUX_ROWS, strict=True):
             self.register.update(
                 self.names[name],
-                lambda patch, name=name: (
-                    fluxes[id(patch)]["x"][name],
-                    fluxes[id(patch)]["y"][name],
+                lambda patch, x_row=x_row, y_row=y_row: block_fluxes(
+                    patch, x_row, y_row
                 ),
                 dt,
                 scale=scale,
             )
         for patch in hierarchy.local_patches:
-            patch.field(self.potential).local[...] -= dt * fluxes[id(patch)]["ez"]
+            potential = patch.field(self.potential).local
+            potential -= dt * fluxes[id(patch)][2]
             if gx or gy:
                 force_x, force_y, work = sources[id(patch)]
                 patch.field(self.names["momentum_x"]).local[...] += dt * force_x
@@ -1005,6 +925,7 @@ class MHD2D:
                 patch.field(self.names["energy"]).local[...] += dt * work
 
     # Time stepping -------------------------------------------------------------#
+    @profile("carafe.mhd_stable_step", tags=_PROFILE_TAGS)
     def stable_step(self) -> float:
         """The largest stable step: ``cfl`` times the fast-wave crossing time of a cell.
 
@@ -1015,26 +936,23 @@ class MHD2D:
         self._check_ready()
         hierarchy = self.hierarchy
         smallest = np.inf
+        out = np.empty(2)  # the largest rate and the smallest density of a patch
         for patch in hierarchy.local_patches:
             dx, dy = hierarchy.spacing(patch.level)
-            az = patch.field(self.potential).local
-            bx, by = self._cell_field(patch, az)
-            cons = [patch.field(self.names[name]).local for name in CONSERVED]
-            rho = cons[0]
-            u, v, w = cons[1] / rho, cons[2] / rho, cons[3] / rho
-            bz = cons[5]
-            p = (self.gamma - 1.0) * (
-                cons[4]
-                - 0.5 * rho * (u**2 + v**2 + w**2)
-                - 0.5 * (bx**2 + by**2 + bz**2)
+            mhd_rate(
+                *(patch.field(self.names[name]).local_with_halos for name in CONSERVED),
+                patch.field(self.potential).local_with_halos,
+                HALO,
+                dx,
+                dy,
+                *self.mean_field,
+                self.gamma,
+                out,
             )
-            cx = _fast_speed(rho, p, bx, by, bz, self.gamma)
-            cy = _fast_speed(rho, p, by, bx, bz, self.gamma)
-            rate = np.max((np.abs(u) + cx) / dx + (np.abs(v) + cy) / dy)
-            smallest = min(smallest, 1.0 / rate)
+            smallest = min(smallest, 1.0 / out[0])
             diffusivity = max(
                 self.resistivity,
-                (self.gamma - 1.0) * max(self.conduction) / float(np.min(rho)),
+                (self.gamma - 1.0) * max(self.conduction) / float(out[1]),
             )
             if diffusivity > 0.0:
                 smallest = min(smallest, 0.5 / (diffusivity * (dx**-2 + dy**-2)))
@@ -1050,18 +968,22 @@ class MHD2D:
             dt = self.stable_step()
         hierarchy = self.hierarchy
         names = [*self.names.values(), self.potential]
-        start = {
-            (id(patch), name): patch.field(name).local.copy()
-            for patch in hierarchy.local_patches
-            for name in names
-        }
+        for patch in hierarchy.local_patches:
+            start = self._buffers(patch)["start"]
+            for name in names:
+                array = patch.field(name).local
+                if name not in start:
+                    start[name] = np.empty_like(array)
+                np.copyto(start[name], array)
         self._advance(dt, 0.5 * dt)
         hierarchy.restrict(self.potential)
         self._advance(dt, 0.5 * dt)
         for patch in hierarchy.local_patches:
+            start = self._buffers(patch)["start"]
             for name in names:
                 array = patch.field(name).local
-                array[...] = 0.5 * (array + start[(id(patch), name)])
+                array += start[name]
+                array *= 0.5
         for name in self.names.values():
             self.register.reflux(name)
         hierarchy.restrict(self.potential)
@@ -1104,7 +1026,7 @@ class MHD2D:
                 continue
             nx, ny = patch.shape
             dx, dy = hierarchy.spacing(patch.level)
-            _, bxf, byf = self._primitive(patch)
+            _, bxf, byf, _ = self._primitive(patch)
             jz = np.abs(self._current(bxf, byf, patch.level))
             # cell (C, R) has the nodes C, C + 1 and R, R + 1: jz index minus one
             cell = 0.25 * sum(
@@ -1128,6 +1050,7 @@ class MHD2D:
         hierarchy = self.hierarchy.regrid(tags, **options)
         hierarchy.restrict(self.potential)
         self.hierarchy = hierarchy
+        self._work = {}
         self.register = FluxRegister(hierarchy)
 
     # Diagnostics ---------------------------------------------------------------#
@@ -1162,7 +1085,7 @@ class MHD2D:
             values = None
             if patch.is_local:
                 nx, ny = patch.shape
-                prim, bxf, byf = self._primitive(patch)
+                prim, bxf, byf, _ = self._primitive(patch)
                 jz = self._current(bxf, byf, patch.level)
                 corner = 0.25 * sum(
                     jz[h - 1 + a : h - 1 + a + nx, h - 1 + b : h - 1 + b + ny]
