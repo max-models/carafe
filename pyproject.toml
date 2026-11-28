@@ -39,6 +39,7 @@ optional-dependencies.dev = [
   "plasma-carafe[docs,test]",
 ]
 optional-dependencies.docs = [
+  "astropy",
   "griffe",
   "kaleido",
   "plasma-plots[web]>=0.3.0",
