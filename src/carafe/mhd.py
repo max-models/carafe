@@ -60,7 +60,9 @@ is, and :math:`A_z` advances with the electric field at the nodes,
 :math:`\partial_t A_z = -E_z`. On a refined hierarchy the nodes a coarse and a fine
 patch share carry the fine value (`patchwork.AMRHierarchy.restrict`), so the flux
 through a coarse face equals the sum of the fine fluxes through it, and the
-divergence of the composite mesh is zero to round-off as well. :math:`\mathbf B_0`
+divergence of the composite mesh is zero to round-off as well. The fine halos of
+:math:`A_z` are interpolated quadratically from the level below (the conserved fields'
+bilinearly), so the current at a coarse–fine edge stays second order. :math:`\mathbf B_0`
 lets a periodic domain carry a net flux, which a periodic :math:`A_z` cannot.
 
 **Numerics.** MUSCL reconstruction of the primitive variables (the slope limiters
@@ -745,7 +747,7 @@ class MHD2D:
         hierarchy = self.hierarchy
         for name in self.names.values():
             hierarchy.exchange_halos(name)
-        hierarchy.exchange_halos(self.potential)
+        hierarchy.exchange_halos(self.potential, interpolation="quadratic")
         for patch in hierarchy.local_patches:
             shape = hierarchy.level_shape(patch.level)
             for axis in range(2):
